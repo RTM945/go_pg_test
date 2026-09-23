@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pdb url="postgres://app:app@127.0.0.1:6432/gamedb?sslmode=disable"
+     genOutput="./ptable"
+     schema="public"
+     poolMaxConns="100" poolMinConns="10"
+     poolMaxConnLifetime="3600" poolMaxConnIdleTime="1800"
+     poolHealthCheckPeriod="60"
+     statementTimeoutMs="5000" idleInTransactionSessionTimeoutMs="5000"
+     lockTimeoutMs="1000"
+     showSQL="true"
+     appName="lobby-svc">
+    <!--
+    CREATE TABLE IF NOT EXISTS users (
+        id            BIGINT NOT NULL,
+        name          TEXT NOT NULL,
+        last_login_at BIGINT NOT NULL,
+        created_at    BIGINT NOT NULL,
+        token         TEXT NOT NULL
+    );
+
+    ALTER TABLE user
+        ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (START WITH 1000),
+        ADD CONSTRAINT pk_user PRIMARY KEY (id);
+
+    CREATE INDEX index_token ON users (token);
+
+    CREATE INDEX joint_index_id_token ON users (id,token);
+    -->
+    <bean name="user">
+        <variable name="id" type="int64"/>
+        <variable name="name" type="string"/>
+        <variable name="lastLoginAt" type="int64"/>
+        <variable name="createdAt" type="int64"/>
+        <variable name="token" type="string"/>
+    </bean>
+    <table name="user" bean="user">
+        <primaryKey variable="id" autoIncrement="true" start="1000"/>
+    </table>
+
+    <bean name="RedEnvelope">
+        <variable name="id" type="int64"/> 自增
+        <variable name="uid" type="int64"/> user id
+        <variable name="actId" type="int32"/> 活动id
+        <variable name="lastRefreshAt" type="int64"/> 上一次刷新的时间
+        <variable name="todayCount" type="int32"/> 今天领了几次
+        <variable name="total" type="int32"/> 总共领了几次
+    </bean>
+
+    <table name="user_red_envelope" bean="RedEnvelope">
+        <primaryKey variable="id" autoIncrement="true"/>
+        <index variable="uid,actId" unique="true"/>
+    </table>
+
+    <bean name="Mail">
+        <variable name="id" type="int64"/> 自增
+        <variable name="uid" type="int64"/> user id
+        <variable name="confId" type="int32"/> 配置id
+        <variable name="state" type="int32"/> 状态
+        <variable name="receiveAt" type="int64"/> 收取时间
+        <variable name="params" type="string"/> json
+        <variable name="awardList" type="string"/> json
+    </bean>
+
+    <table name="user_mail" bean="Mail">
+        <primaryKey variable="id" autoIncrement="true"/>
+        <index variable="uid,confId" unique="false"/>
+    </table>
+
+    <bean name="GMMail">
+        <variable name="id" type="int64"/> 自增
+        <variable name="params" type="string"/> json
+        <variable name="awardList" type="string"/> json
+        <variable name="startAt" type="int64"/> 开始时间
+        <variable name="endAt" type="int64"/> 结束时间
+        <variable name="channel" type="string"/> 渠道
+        <variable name="userCreatedAt" type="int64"/> 创角时间
+        <variable name="condition" type="string"/> 条件 应该需要脚本引擎执行
+    </bean>
+
+    <table name="user_gm_mail" bean="GMMail">
+        <primaryKey variable="id" autoIncrement="true"/>
+    </table>
+</pdb>
+
