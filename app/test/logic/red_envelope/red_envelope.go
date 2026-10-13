@@ -1,9 +1,11 @@
-package redenvelope
+package red_envelope
 
 import (
 	"context"
 	"fmt"
-	"pdbgen/ptable"
+	"go_pg_test/app/test/msg"
+	"go_pg_test/app/test/ptable"
+	"go_pg_test/io"
 	"time"
 )
 
@@ -46,6 +48,20 @@ func (e *RedEnvelope) refresh() {
 	//}
 }
 
-func (e *RedEnvelope) Online() {
+func (e *RedEnvelope) Online(session *io.Session) error {
 	fmt.Println("online")
+
+	resp := msg.NewSRedEnvelope()
+	resp.ActId = e.ActId()
+	resp.LastRefreshAt = e.LastRefreshAt()
+	resp.TodayCount = e.TodayCount()
+	resp.Total = e.Total()
+	return session.Write(resp)
+}
+
+func (e *RedEnvelope) Click(session *io.Session) error {
+	fmt.Println("click")
+	e.SetTodayCount(e.TodayCount() + 1)
+	e.SetTotal(e.Total() + 1)
+	return e.Online(session)
 }

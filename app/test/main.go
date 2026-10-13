@@ -2,18 +2,36 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
-	"go_pg_test/io"
-	"go_pg_test/logic/redenvelope"
-	"go_pg_test/protocol"
 	"hash/maphash"
+	"log"
 	"net/http"
+
+	"go_pg_test/io"
 	"pdbgen/dbpool"
 	"pdbgen/readxml"
 )
 
+var (
+	// ErrUnknownTypeId 对端发来了没有注册处理函数的协议号。
+	ErrUnknownTypeId = errors.New("unknown protocol type id")
+	// ErrMalformedPayload 协议体不是该协议号对应的合法 protobuf。
+	ErrMalformedPayload = errors.New("malformed protocol payload")
+)
+
+var (
+	// 默认值按"二进制旁边放配置"的目录形态给，仓库相对路径由 makefile 传，
+	// 别把 app/test/ 这种位置信息写进代码里。
+	schemaPath = flag.String("schema", "pdb.xml", "pdb.xml 的路径")
+	addr       = flag.String("addr", ":8080", "监听地址")
+)
+
 func main() {
-	schema, err := readxml.LoadSchema("./pdb.xml")
+	flag.Parse()
+
+	schema, err := readxml.LoadSchema(*schemaPath)
 	if err != nil {
 		panic(err)
 	}
@@ -22,60 +40,54 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	//var uid int64 = 1001
-	//lockKey := "user"
-	//var processUserRedEnvelopeOnline = func(ctx context.Context) error {
-	//	userRedEnvelope := redenvelope.Get(ctx, uid, 1, false)
-	//	userRedEnvelope.Online()
-	//	return nil
-	//}
-	//err = dbpool.WithTryAdvisoryLock(ctx, lockKey, uid, processUserRedEnvelopeOnline)
-	//if err != nil {
-	//	panic(err)
-	//}
-
-	reg := NewProcessorRegistry()
-
-	processCRedEnvelope := func(ctx context.Context, req *protocol.CRedEnvelope) error {
-		uid := req.Session().UID
-		userRedEnvelope := redenvelope.Get(ctx, uid, 1, false)
-		userRedEnvelope.Online()
-		return nil
-	}
-
-	// todo Register 分user调用协议和GM/RPC调用协议
-	reg.Register(protocol.CRedEnvelopeTypeId, protocol.NewCRedEnvelope, processCRedEnvelope, processUserTryLock)
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", handler(reg))
+	mux.HandleFunc("/", handler(processRegistry))
 
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	log.Printf("appName=%s listening on %s, schema=%s", schema.AppName, *addr, *schemaPath)
+	if err := http.ListenAndServe(*addr, mux); err != nil {
 		panic(err)
 	}
 }
 
-func handler(registry *ProcessorRegistry) func(http.ResponseWriter, *http.Request) {
+func handler(reg *ProcessorRegistry) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 用浏览器测试会有这种干扰 先干掉 后面改用Gin
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
+
+		// body 就是一帧二进制，解出协议号和协议体
+		typeId, payload, err := io.ReadFrame(r.Body)
+		if err != nil {
+			// 帧都读不出来，一定是客户端的问题
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		// todo header 拿出token 去redis 拿到uid
 		session := &io.Session{
 			UID: 1003,
+			W:   w,
 		}
-		//todo 再从body解出协议体
-		typeId := protocol.CRedEnvelopeTypeId
-		buffer := make([]byte, 1024)
-		err := registry.Dispatch(typeId, buffer, session)
-		if err != nil {
-			// todo 报错
-			w.WriteHeader(http.StatusInternalServerError)
-		} else {
-			w.WriteHeader(http.StatusOK)
+
+		if err := reg.Dispatch(typeId, payload, session); err != nil {
+			// 协议号不认识、协议体解不出，都是客户端发错了
+			if errors.Is(err, ErrUnknownTypeId) || errors.Is(err, ErrMalformedPayload) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			// 剩下的才是服务端自己的问题，不把内部细节漏给客户端，但要留日志
+			log.Printf("dispatch typeId %d failed: %v", typeId, err)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
+
+		// 成功这里不用再写状态码：响应帧由处理器通过 session.Write 写出，
+		// 那次 Write 会带上 200；处理器没写的话 net/http 也会补一个空 200。
+		// 在这里再 WriteHeader 一次是多余的，日志里会报 superfluous。
 	}
 }
 
@@ -126,7 +138,7 @@ func (p *ProcessorRegistry) Register[T io.Msg](typeId int32, newMsg func() T, fn
 	p.registry[typeId] = func(buffer []byte, session *io.Session) error {
 		msg := newMsg()
 		if err := msg.Read(buffer); err != nil {
-			return fmt.Errorf("decode typeId %d failed: %w", typeId, err)
+			return fmt.Errorf("%w: typeId %d: %w", ErrMalformedPayload, typeId, err)
 		}
 		msg.SetSession(session)
 
@@ -153,7 +165,7 @@ func (p *ProcessorRegistry) Register[T io.Msg](typeId int32, newMsg func() T, fn
 func (p *ProcessorRegistry) Dispatch(typeId int32, buffer []byte, session *io.Session) error {
 	fn, ok := p.registry[typeId]
 	if !ok {
-		return fmt.Errorf("no processor registered for typeId %d", typeId)
+		return fmt.Errorf("%w: %d", ErrUnknownTypeId, typeId)
 	}
 	return fn(buffer, session)
 }

@@ -1,0 +1,19 @@
+syntax = "proto3";
+package proto;
+
+import "google/protobuf/descriptor.proto";
+option go_package = "go_pg_test/genpb/common;commonpb";
+
+// 扩展 MessageOptions，让每个 message 都可以打一个 type_id 标签。
+//
+// type_id 全局唯一——跨 app 也不许重复，因为网关/跨服转发时同一个号在两处
+// 含义不同就是灾难。按号段人工分配：
+//
+//	100-199  app/test
+//	200-299  （下一个 app）
+//
+// 号段只是约定，生成器不强制，只查重复：撞了 go run ./cmd/genpb 会直接报错
+// 并指出是哪两个 message 撞的。
+extend google.protobuf.MessageOptions {
+  int32 type_id = 51234;
+}
