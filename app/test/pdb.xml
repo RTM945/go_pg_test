@@ -6,7 +6,7 @@
      poolMaxConnLifetime="3600" poolMaxConnIdleTime="1800"
      poolHealthCheckPeriod="60"
      statementTimeoutMs="5000" idleInTransactionSessionTimeoutMs="5000"
-     lockTimeoutMs="1000"
+     lockTimeoutMs="1000" transactionTimeoutMs="5000"
      showSQL="true"
      appName="lobby-svc">
     <!--

@@ -8,11 +8,18 @@ import (
 	"hash/maphash"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"go_pg_test/io"
 	"pdbgen/dbpool"
 	"pdbgen/readxml"
 )
+
+// shutdownTimeout 优雅关闭的等待上限，超过就强断。
+const shutdownTimeout = 10 * time.Second
 
 var (
 	// ErrUnknownTypeId 对端发来了没有注册处理函数的协议号。
@@ -24,9 +31,11 @@ var (
 var (
 	// 默认值按"二进制旁边放配置"的目录形态给，仓库相对路径由 makefile 传，
 	// 别把 app/test/ 这种位置信息写进代码里。
-	schemaPath = flag.String("schema", "pdb.xml", "pdb.xml 的路径")
+	schemaPath = flag.String("schema", "app/test/pdb.xml", "pdb.xml 的路径")
 	addr       = flag.String("addr", ":8080", "监听地址")
 )
+
+var processRegistry = NewProcessorRegistry()
 
 func main() {
 	flag.Parse()
@@ -41,24 +50,60 @@ func main() {
 		panic(err)
 	}
 
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/", handler(processRegistry))
+	// 收到 Ctrl+C / SIGTERM 就取消
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	log.Printf("appName=%s listening on %s, schema=%s", schema.AppName, *addr, *schemaPath)
-	if err := http.ListenAndServe(*addr, mux); err != nil {
-		panic(err)
+	serveErr := serve(ctx, &http.Server{Addr: *addr, Handler: newMux(processRegistry)}, shutdownTimeout)
+
+	// 收摊必须排在 serve 之后，不能在它前面——理由见 dbpool.Close 的注释。
+	// 这里不用 defer：下面 log.Fatal 会 os.Exit，defer 根本不会跑。
+	dbpool.Close()
+
+	if serveErr != nil {
+		log.Fatal(serveErr)
 	}
+	log.Println("bye")
+}
+
+// serve 起服务，ctx 一取消就优雅关闭：不再收新连接，等在途请求跑完。
+//
+// ListenAndServe 是阻塞的，所以它得在 goroutine 里跑，主流程留着等 ctx。
+// Shutdown 的语义是"等"，它不会去取消在途请求的 ctx——所以这里的超时
+// 不是用来打断请求的，是最后兜底：等不到就强关，并让这件事在日志里可见。
+func serve(ctx context.Context, srv *http.Server, timeout time.Duration) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+
+	select {
+	case err := <-errCh:
+		// 还没等到信号就退出了，多半是端口被占
+		return fmt.Errorf("listen %s: %w", srv.Addr, err)
+	case <-ctx.Done():
+		log.Println("收到退出信号，等在途请求结束……")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("优雅关闭超时（%s），强制关闭: %v", timeout, err)
+		_ = srv.Close()
+	}
+	return nil
+}
+
+// newMux 单独拆出来是为了能直接测路由：只有 POST 会进 handler，
+// 浏览器拿 GET 去摸 /favicon.ico 在 mux 这一层就被挡掉，
+// 不用在 handler 里自己判 r.URL.Path。
+func newMux(reg *ProcessorRegistry) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /", handler(reg))
+	return mux
 }
 
 func handler(reg *ProcessorRegistry) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 用浏览器测试会有这种干扰 先干掉 后面改用Gin
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-
 		// body 就是一帧二进制，解出协议号和协议体
 		typeId, payload, err := io.ReadFrame(r.Body)
 		if err != nil {
@@ -77,6 +122,12 @@ func handler(reg *ProcessorRegistry) func(http.ResponseWriter, *http.Request) {
 			// 协议号不认识、协议体解不出，都是客户端发错了
 			if errors.Is(err, ErrUnknownTypeId) || errors.Is(err, ErrMalformedPayload) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			// 同一个 uid 的上一次请求还占着咨询锁。这不是服务端的错，
+			// 语义是"你上一次还没做完，稍后重试"——回 500 的话客户端会当成 bug。
+			if errors.Is(err, dbpool.ErrAdvisoryLockNotAcquired) {
+				http.Error(w, "previous request for this user is still in flight", http.StatusConflict)
 				return
 			}
 			// 剩下的才是服务端自己的问题，不把内部细节漏给客户端，但要留日志
