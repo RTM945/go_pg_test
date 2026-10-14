@@ -212,7 +212,7 @@ func main() {
 		return true
 	})
 	if typeIDExtType == nil {
-		log.Fatal("没找到 proto.type_id 扩展，确认 proto/ext.proto 存在且已生成")
+		log.Fatal("proto.type_id extension not found; check that proto/ext.proto exists and has been generated")
 	}
 
 	groups, err := collectTypeIds(files, typeIDExtType)
@@ -258,7 +258,7 @@ func cleanGenerated(repoRoot string) error {
 	if err := os.RemoveAll(genpbDir); err != nil {
 		return err
 	}
-	log.Printf("已清空 %s", genpbDir)
+	log.Printf("cleared %s", genpbDir)
 
 	apps, err := os.ReadDir(filepath.Join(repoRoot, "app"))
 	if err != nil {
@@ -299,7 +299,7 @@ const PROTOCOL_TYPE_{{.Name}} int32 = {{.TypeId}}
 func writeProtocolTypes(repoRoot, module string, g *typeIdGroup) error {
 	rel, ok := strings.CutPrefix(g.GoImportPath, module+"/")
 	if !ok {
-		return fmt.Errorf("go_package %q 不在 module %s 下", g.GoImportPath, module)
+		return fmt.Errorf("go_package %q is not under module %s", g.GoImportPath, module)
 	}
 	return writeGenerated(filepath.Join(repoRoot, filepath.FromSlash(rel), "protocol_types.go"), protocolTypesTmpl, g)
 }
@@ -321,7 +321,7 @@ func modulePath(goModPath string) (string, error) {
 	if err := sc.Err(); err != nil {
 		return "", err
 	}
-	return "", fmt.Errorf("%s 里没找到 module 行", goModPath)
+	return "", fmt.Errorf("%s: no module line found", goModPath)
 }
 
 func goEnv(name string) (string, error) {
@@ -424,11 +424,11 @@ func collectTypeIds(files *protoregistry.Files, typeIDExtType protoreflect.Exten
 
 			// type_id 全局唯一，跨 app 也不许重复
 			if prev, ok := byTypeId[typeId]; ok {
-				fail = fmt.Errorf("type_id %d 撞车: %s 和 %s", typeId, prev.where, where)
+				fail = fmt.Errorf("duplicate type_id %d: %s and %s", typeId, prev.where, where)
 				return false
 			}
 			if prev, ok := byName[name]; ok {
-				fail = fmt.Errorf("message 重名 %s: %s 和 %s，生成的 PROTOCOL_TYPE_%s 会重复", name, prev.where, where, name)
+				fail = fmt.Errorf("duplicate message name %s: %s and %s would both generate PROTOCOL_TYPE_%s", name, prev.where, where, name)
 				return false
 			}
 
@@ -462,11 +462,11 @@ func collectTypeIds(files *protoregistry.Files, typeIDExtType protoreflect.Exten
 func goPackageOf(fd protoreflect.FileDescriptor) (importPath, packageName string, err error) {
 	opts, ok := fd.Options().(*descriptorpb.FileOptions)
 	if !ok || opts.GetGoPackage() == "" {
-		return "", "", fmt.Errorf("%s 没写 go_package", fd.Path())
+		return "", "", fmt.Errorf("%s: no go_package", fd.Path())
 	}
 	importPath, packageName, ok = strings.Cut(opts.GetGoPackage(), ";")
 	if !ok || importPath == "" || packageName == "" {
-		return "", "", fmt.Errorf(`%s 的 go_package 要写成 "import/path;pkgname" 的形式，现在是 %q`,
+		return "", "", fmt.Errorf(`%s: go_package must be "import/path;pkgname", got %q`,
 			fd.Path(), opts.GetGoPackage())
 	}
 	return importPath, packageName, nil

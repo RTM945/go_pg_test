@@ -2,11 +2,11 @@ package red_envelope
 
 import (
 	"context"
-	"fmt"
+	"time"
+
 	"go_pg_test/app/test/msg"
 	"go_pg_test/app/test/ptable"
 	"go_pg_test/io"
-	"time"
 )
 
 type RedEnvelope struct {
@@ -49,7 +49,7 @@ func (e *RedEnvelope) refresh() {
 }
 
 func (e *RedEnvelope) Online(session *io.Session) error {
-	fmt.Println("online")
+	session.Logger().Info("online", "uid", e.Uid(), "actId", e.ActId(), "todayCount", e.TodayCount(), "total", e.Total())
 
 	resp := msg.NewSRedEnvelope()
 	resp.ActId = e.ActId()
@@ -60,7 +60,7 @@ func (e *RedEnvelope) Online(session *io.Session) error {
 }
 
 func (e *RedEnvelope) Click(session *io.Session) error {
-	fmt.Println("click")
+	session.Logger().Info("click", "uid", e.Uid(), "actId", e.ActId(), "todayCount", e.TodayCount(), "total", e.Total())
 	e.SetTodayCount(e.TodayCount() + 1)
 	e.SetTotal(e.Total() + 1)
 	return e.Online(session)

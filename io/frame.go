@@ -60,7 +60,7 @@ func ReadFrame(r stdio.Reader) (typeId int32, payload []byte, err error) {
 func WriteFrame(w stdio.Writer, typeId int32, payload []byte) error {
 	// 发出去的包超过上限，对端也会拒，不如在本地就拦住
 	if len(payload) > MaxPayloadSize {
-		return fmt.Errorf("typeId %d: payload 长度 %d 超过上限 %d", typeId, len(payload), MaxPayloadSize)
+		return fmt.Errorf("typeId %d: payload size %d exceeds limit %d", typeId, len(payload), MaxPayloadSize)
 	}
 
 	var header [FrameHeaderSize]byte
@@ -68,10 +68,10 @@ func WriteFrame(w stdio.Writer, typeId int32, payload []byte) error {
 	binary.BigEndian.PutUint32(header[4:8], uint32(typeId))
 
 	if _, err := w.Write(header[:]); err != nil {
-		return fmt.Errorf("typeId %d: 写包头: %w", typeId, err)
+		return fmt.Errorf("typeId %d: write header: %w", typeId, err)
 	}
 	if _, err := w.Write(payload); err != nil {
-		return fmt.Errorf("typeId %d: 写包体: %w", typeId, err)
+		return fmt.Errorf("typeId %d: write payload: %w", typeId, err)
 	}
 	return nil
 }

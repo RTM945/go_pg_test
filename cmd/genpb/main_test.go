@@ -120,7 +120,7 @@ func TestCollectTypeIdsError(t *testing.T) {
 				Options:     fileOptions("go_pg_test/genpb/a;apb"),
 				MessageType: []*descriptorpb.DescriptorProto{msgWithTypeId("MsgA", 123), msgWithTypeId("MsgB", 123)},
 			}},
-			wantMsg: "type_id 123 撞车",
+			wantMsg: "duplicate type_id 123",
 		},
 		{
 			name: "跨文件 type_id 撞车",
@@ -140,7 +140,7 @@ func TestCollectTypeIdsError(t *testing.T) {
 					MessageType: []*descriptorpb.DescriptorProto{msgWithTypeId("MsgB", 123)},
 				},
 			},
-			wantMsg: "type_id 123 撞车",
+			wantMsg: "duplicate type_id 123",
 		},
 		{
 			// 同包重名 protodesc 自己就拦了（already declared），
@@ -162,7 +162,7 @@ func TestCollectTypeIdsError(t *testing.T) {
 					MessageType: []*descriptorpb.DescriptorProto{msgWithTypeId("MsgA", 124)},
 				},
 			},
-			wantMsg: "message 重名 MsgA",
+			wantMsg: "duplicate message name MsgA",
 		},
 		{
 			name: "没写 go_package",
@@ -172,7 +172,7 @@ func TestCollectTypeIdsError(t *testing.T) {
 				Syntax:      new("proto3"),
 				MessageType: []*descriptorpb.DescriptorProto{msgWithTypeId("MsgA", 123)},
 			}},
-			wantMsg: "没写 go_package",
+			wantMsg: "no go_package",
 		},
 		{
 			name: "go_package 缺包名",

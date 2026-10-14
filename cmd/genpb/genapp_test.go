@@ -178,8 +178,8 @@ func TestGenLogicStubRefusesWithoutImports(t *testing.T) {
 	if err == nil {
 		t.Fatal("genLogicStub() = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "导入") {
-		t.Errorf("error = %q, 应该说明缺导入", err)
+	if !strings.Contains(err.Error(), "missing import") {
+		t.Errorf("error = %q, should name the missing import", err)
 	}
 	if got := readFile(t, path); got != bare {
 		t.Errorf("报错了却改了文件\n%s", got)

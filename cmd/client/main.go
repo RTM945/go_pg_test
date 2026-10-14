@@ -38,12 +38,12 @@ import (
 )
 
 var (
-	addr = flag.String("addr", "http://127.0.0.1:8080", "服务器地址")
-	name = flag.String("msg", "CRedEnvelope", "协议名，短名或全名，如 CRedEnvelope 或 test.CRedEnvelope")
-	id   = flag.Int("type", 0, "协议号，和 -msg 二选一")
-	data = flag.String("data", "", "payload 的 JSON，字段名按 .proto 里写的")
-	raw  = flag.String("raw", "", "payload 的十六进制，如 082a；用来造非法包")
-	list = flag.Bool("list", false, "只列出所有协议")
+	addr = flag.String("addr", "http://127.0.0.1:8080", "server address")
+	name = flag.String("msg", "CRedEnvelope", "protocol name, short or full (CRedEnvelope / test.CRedEnvelope)")
+	id   = flag.Int("type", 0, "typeId, alternative to -msg")
+	data = flag.String("data", "", "payload as JSON, field names as in the .proto")
+	raw  = flag.String("raw", "", "payload as hex, e.g. 082a; for crafting bad frames")
+	list = flag.Bool("list", false, "list all protocols and exit")
 )
 
 func main() {
@@ -101,7 +101,7 @@ func loadDescriptors() (*protoregistry.Files, error) {
 
 	raw, err := os.ReadFile(filepath.Join(repoRoot, "genpb", "desc.pb"))
 	if err != nil {
-		return nil, fmt.Errorf("读不到 desc.pb，先跑 go run ./cmd/genpb: %w", err)
+		return nil, fmt.Errorf("cannot read desc.pb; run go run ./cmd/genpb first: %w", err)
 	}
 
 	fds := &descriptorpb.FileDescriptorSet{}
@@ -136,18 +136,18 @@ func indexMessages(files *protoregistry.Files) (map[string]protoreflect.MessageD
 
 func resolve(byName map[string]protoreflect.MessageDescriptor, byTypeId map[int32]protoreflect.MessageDescriptor) (protoreflect.MessageDescriptor, int32, error) {
 	if *name == "" && *id == 0 {
-		return nil, 0, errors.New("要指定协议：-msg CRedEnvelope 或 -type 125，-list 看全部")
+		return nil, 0, errors.New("specify a protocol: -msg CRedEnvelope or -type 125; -list shows all")
 	}
 
 	if *name != "" {
 		md, ok := byName[*name]
 		if !ok {
-			return nil, 0, fmt.Errorf("没有叫 %q 的协议，-list 看全部", *name)
+			return nil, 0, fmt.Errorf("no protocol named %q; -list shows all", *name)
 		}
 		opts, _ := md.Options().(*descriptorpb.MessageOptions)
 		typeId, ok := proto.GetExtension(opts, commonpb.E_TypeId).(int32)
 		if !ok {
-			return nil, 0, fmt.Errorf("%s 没打 (proto.type_id)，发不了", md.FullName())
+			return nil, 0, fmt.Errorf("%s has no (proto.type_id), cannot send", md.FullName())
 		}
 		return md, typeId, nil
 	}
@@ -156,7 +156,7 @@ func resolve(byName map[string]protoreflect.MessageDescriptor, byTypeId map[int3
 	if !ok {
 		// 放行客户端不认识的协议号——这正是在测服务端的"未注册协议号"分支，
 		// 是 -type 的正当用法之一。
-		fmt.Fprintf(os.Stderr, "client: 提示：协议号 %d 不在 desc.pb 里，按原始字节发，响应也只能按原始字节看\n", *id)
+		fmt.Fprintf(os.Stderr, "client: note: typeId %d is not in desc.pb; sending raw bytes, response shown raw too\n", *id)
 	}
 	return md, int32(*id), nil
 }
@@ -167,11 +167,11 @@ func buildPayload(md protoreflect.MessageDescriptor) ([]byte, error) {
 		return hex.DecodeString(strings.ReplaceAll(*raw, " ", ""))
 	case *data != "":
 		if md == nil {
-			return nil, errors.New("这个协议号客户端不认识，编不了 -data，只能配合 -raw 用")
+			return nil, errors.New("client does not know this typeId; cannot build -data, use -raw")
 		}
 		m := dynamicpb.NewMessage(md)
 		if err := protojson.Unmarshal([]byte(*data), m); err != nil {
-			return nil, fmt.Errorf("-data 不是合法的 %s JSON: %w", md.Name(), err)
+			return nil, fmt.Errorf("-data is not valid %s JSON: %w", md.Name(), err)
 		}
 		return proto.Marshal(m)
 	default:
@@ -206,17 +206,17 @@ func roundTrip(typeId int32, payload []byte) (respTypeId int32, respPayload []by
 func printResponse(typeId int32, payload []byte, byTypeId map[int32]protoreflect.MessageDescriptor) {
 	md, ok := byTypeId[typeId]
 	if !ok {
-		fmt.Printf("← typeId=%-4d 没注册对应协议，原始字节 %s\n", typeId, hex.EncodeToString(payload))
+		fmt.Printf("← typeId=%-4d no protocol registered, raw %s\n", typeId, hex.EncodeToString(payload))
 		return
 	}
 
 	m := dynamicpb.NewMessage(md)
 	if err := proto.Unmarshal(payload, m); err != nil {
-		fmt.Printf("← %s typeId=%d 解不出: %v，原始字节 %s\n", md.Name(), typeId, err, hex.EncodeToString(payload))
+		fmt.Printf("← %s typeId=%d cannot decode: %v, raw %s\n", md.Name(), typeId, err, hex.EncodeToString(payload))
 		return
 	}
 
-	fmt.Printf("← %-24s typeId=%-4d %d 字节\n", md.Name(), typeId, len(payload))
+	fmt.Printf("← %-24s typeId=%-4d %d bytes\n", md.Name(), typeId, len(payload))
 
 	// 用 prototext 不用 protojson：int64 在 JSON 里会被渲染成字符串，时间戳看着别扭
 	out, err := prototext.MarshalOptions{Multiline: true, Indent: "  "}.Marshal(m)
@@ -232,7 +232,7 @@ func printResponse(typeId int32, payload []byte, byTypeId map[int32]protoreflect
 
 	// proto3 不编码零值，字段直接不出现。不点明的话会让人以为字段丢了。
 	if missing := missingFields(m); len(missing) > 0 {
-		fmt.Printf("  (零值字段没进包：%s)\n", strings.Join(missing, ", "))
+		fmt.Printf("  (zero-valued fields not in payload: %s)\n", strings.Join(missing, ", "))
 	}
 }
 
@@ -278,7 +278,7 @@ func findRepoRoot(start string) (string, error) {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", errors.New("往上找到根了也没找到 go.mod")
+			return "", errors.New("no go.mod found up to the filesystem root")
 		}
 		dir = parent
 	}

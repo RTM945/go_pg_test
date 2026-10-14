@@ -298,7 +298,7 @@ func writeGenerated(path, tmpl string, data any) error {
 	if err := os.WriteFile(path, buf, 0o644); err != nil {
 		return err
 	}
-	log.Printf("生成 %s", path)
+	log.Printf("wrote %s", path)
 	return nil
 }
 
@@ -327,7 +327,7 @@ func genLogicStub(path string, pf *protoFile) error {
 		if err := writeGenerated(path, logicStubTmpl, pf); err != nil {
 			return err
 		}
-		log.Printf("%s 是新建的脚手架，之后归人维护", path)
+		log.Printf("%s: new stub, yours to maintain from here on", path)
 		return nil
 	}
 	if err != nil {
@@ -337,7 +337,7 @@ func genLogicStub(path string, pf *protoFile) error {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
 	if err != nil {
-		return fmt.Errorf("%s 解析不了（是不是正改到一半？），改完再跑生成器: %w", path, err)
+		return fmt.Errorf("%s: cannot parse (mid-edit?); finish it and rerun the generator: %w", path, err)
 	}
 
 	have := make(map[string]bool, len(f.Decls))
@@ -361,7 +361,7 @@ func genLogicStub(path string, pf *protoFile) error {
 	// 猜错了会写出一份编译不过的文件，比直接报错难查。
 	for _, need := range []string{"context", pf.MsgImportPath()} {
 		if !hasImport(f, need) {
-			return fmt.Errorf("%s 缺 %q 的导入，补上再跑生成器", path, need)
+			return fmt.Errorf("%s: missing import %q; add it and rerun the generator", path, need)
 		}
 	}
 
@@ -374,7 +374,7 @@ func genLogicStub(path string, pf *protoFile) error {
 	// 追加的部分则保证格式正确。过不了说明拼出来的不是合法 Go，不写。
 	merged, err := format.Source(append(slices.Clone(src), frag.Bytes()...))
 	if err != nil {
-		return fmt.Errorf("补齐 %s 后不是合法 Go，没写入: %w", path, err)
+		return fmt.Errorf("%s: result after top-up is not valid Go, nothing written: %w", path, err)
 	}
 	if err := os.WriteFile(path, merged, 0o644); err != nil {
 		return err
@@ -384,7 +384,7 @@ func genLogicStub(path string, pf *protoFile) error {
 	for _, m := range missing {
 		names = append(names, "Process"+m.Name)
 	}
-	log.Printf("补齐 %s：%s", path, strings.Join(names, ", "))
+	log.Printf("%s: topped up %s", path, strings.Join(names, ", "))
 	return nil
 }
 
@@ -409,7 +409,7 @@ func render(tmpl string, data any) ([]byte, error) {
 	}
 	src, err := format.Source(buf.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("生成的代码不合法: %w\n---\n%s", err, buf.String())
+		return nil, fmt.Errorf("generated code is not valid Go: %w\n---\n%s", err, buf.String())
 	}
 	return src, nil
 }
