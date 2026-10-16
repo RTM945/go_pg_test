@@ -30,6 +30,21 @@ var ErrMalformedFrame = errors.New("malformed frame")
 // 只收单帧：读完一帧后 r 必须恰好结束，多出来的字节说明客户端和服务端对
 // 封包格式的理解不一致，直接报错而不是静默丢弃。
 func ReadFrame(r stdio.Reader) (typeId int32, payload []byte, err error) {
+	typeId, payload, err = readOneFrame(r)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	var extra [1]byte
+	if n, _ := r.Read(extra[:]); n > 0 {
+		return 0, nil, fmt.Errorf("%w: trailing bytes after frame", ErrMalformedFrame)
+	}
+	return typeId, payload, nil
+}
+
+// readOneFrame 读一帧，不管后面还有没有别的字节。
+// 严格性（读完必须结束）由 ReadFrame 加，多帧由 ReadFrames 循环——两者共用这一份解析。
+func readOneFrame(r stdio.Reader) (typeId int32, payload []byte, err error) {
 	var header [FrameHeaderSize]byte
 	if _, err := stdio.ReadFull(r, header[:]); err != nil {
 		return 0, nil, fmt.Errorf("%w: read header: %w", ErrMalformedFrame, err)
@@ -45,33 +60,70 @@ func ReadFrame(r stdio.Reader) (typeId int32, payload []byte, err error) {
 	if _, err := stdio.ReadFull(r, payload); err != nil {
 		return 0, nil, fmt.Errorf("%w: read payload: %w", ErrMalformedFrame, err)
 	}
-
-	var extra [1]byte
-	if n, _ := r.Read(extra[:]); n > 0 {
-		return 0, nil, fmt.Errorf("%w: trailing bytes after frame", ErrMalformedFrame)
-	}
 	return typeId, payload, nil
 }
 
-// WriteFrame 把 payload 按封包格式写成一帧，和 ReadFrame 对称。
+// AppendFrame 把一帧追加到 dst 后面。包头怎么排只有这一处知道。
 //
-// 封包格式就这一处定义：服务端回包、调试客户端发包、实机测试发包都走这里，
-// 免得格式改一处漏两处。
-func WriteFrame(w stdio.Writer, typeId int32, payload []byte) error {
+// 用它攒多帧再一次写出，比赛多次 WriteFrame 省 syscall——服务端回包会用到。
+func AppendFrame(dst []byte, typeId int32, payload []byte) ([]byte, error) {
 	// 发出去的包超过上限，对端也会拒，不如在本地就拦住
 	if len(payload) > MaxPayloadSize {
-		return fmt.Errorf("typeId %d: payload size %d exceeds limit %d", typeId, len(payload), MaxPayloadSize)
+		return nil, fmt.Errorf("typeId %d: payload size %d exceeds limit %d", typeId, len(payload), MaxPayloadSize)
 	}
 
 	var header [FrameHeaderSize]byte
 	binary.BigEndian.PutUint32(header[:4], uint32(len(payload)))
 	binary.BigEndian.PutUint32(header[4:8], uint32(typeId))
 
-	if _, err := w.Write(header[:]); err != nil {
-		return fmt.Errorf("typeId %d: write header: %w", typeId, err)
+	dst = append(dst, header[:]...)
+	return append(dst, payload...), nil
+}
+
+// WriteFrame 把 payload 按封包格式写成一帧，和 ReadFrame 对称。
+func WriteFrame(w stdio.Writer, typeId int32, payload []byte) error {
+	frame, err := AppendFrame(nil, typeId, payload)
+	if err != nil {
+		return err
 	}
-	if _, err := w.Write(payload); err != nil {
-		return fmt.Errorf("typeId %d: write payload: %w", typeId, err)
+	if _, err := w.Write(frame); err != nil {
+		return fmt.Errorf("typeId %d: write: %w", typeId, err)
 	}
 	return nil
+}
+
+// Frame 一帧解出来的结果。
+type Frame struct {
+	TypeId  int32
+	Payload []byte
+}
+
+// MaxFrames 一次响应最多几帧。防对端发无穷帧把内存撑爆。
+const MaxFrames = 64
+
+// ReadFrames 连续读到流结束，返回期间读到的所有帧。
+//
+// 响应侧用它：一次请求可能触发好几个模块，各自的响应协议会一起发回来，
+// 通常 1 帧，也可能几帧。请求侧仍然用 ReadFrame（严格单帧），那边的
+// "多余字节就报错"是防客户端格式写错的，有价值。
+//
+// 边界靠 ReadFrame 的语义分：
+//   - 恰好在帧边界读到流尾 → 正常结束，返回已读到的帧
+//   - 读到半个包头或半个包体 → ReadFrame 会包成 ErrUnexpectedEOF，是真坏了
+func ReadFrames(r stdio.Reader) ([]Frame, error) {
+	frames := make([]Frame, 0, 4)
+
+	for {
+		typeId, payload, err := readOneFrame(r)
+		if errors.Is(err, stdio.EOF) {
+			return frames, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(frames) >= MaxFrames {
+			return nil, fmt.Errorf("frame count exceeds limit %d", MaxFrames)
+		}
+		frames = append(frames, Frame{TypeId: typeId, Payload: payload})
+	}
 }

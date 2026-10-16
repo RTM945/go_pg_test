@@ -70,7 +70,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	respTypeId, respPayload, status, err := roundTrip(typeId, payload)
+	frames, status, body, err := roundTrip(typeId, payload)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -83,9 +83,15 @@ func main() {
 	fmt.Printf("→ %-24s typeId=%-4d %s\n", msgName, typeId, hex.EncodeToString(payload))
 
 	if status != http.StatusOK {
-		log.Fatalf("← HTTP %d  %s\n", status, strings.TrimSpace(string(respPayload)))
+		log.Fatalf("← HTTP %d  %s\n", status, strings.TrimSpace(string(body)))
 	}
-	printResponse(respTypeId, respPayload, byTypeId)
+	if len(frames) == 0 {
+		fmt.Println("← 服务器一帧都没回")
+		return
+	}
+	for i, f := range frames {
+		printFrame(i, len(frames), f, byTypeId)
+	}
 }
 
 // loadDescriptors 读 genpb/desc.pb。它由 genpb 每次生成时一并写出，和代码同源。
@@ -179,16 +185,17 @@ func buildPayload(md protoreflect.MessageDescriptor) ([]byte, error) {
 	}
 }
 
-// roundTrip 发一帧、读回一帧。编码和解码都用 io 包，格式不在本地重写一遍。
-func roundTrip(typeId int32, payload []byte) (respTypeId int32, respPayload []byte, status int, err error) {
+// roundTrip 发一帧、把响应里的帧全读回来。编码和解码都用 io 包，格式不在本地重写一遍。
+// 请求侧是严格单帧，响应侧可能多帧，所以这里用 ReadFrames。
+func roundTrip(typeId int32, payload []byte) (frames []gopgio.Frame, status int, body []byte, err error) {
 	var frame bytes.Buffer
 	if err := gopgio.WriteFrame(&frame, typeId, payload); err != nil {
-		return 0, nil, 0, err
+		return nil, 0, nil, err
 	}
 
 	resp, err := http.Post(*addr+"/", "application/octet-stream", &frame)
 	if err != nil {
-		return 0, nil, 0, err
+		return nil, 0, nil, err
 	}
 	defer resp.Body.Close()
 
@@ -196,27 +203,38 @@ func roundTrip(typeId int32, payload []byte) (respTypeId int32, respPayload []by
 	if status != http.StatusOK {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(resp.Body)
-		return 0, buf.Bytes(), status, nil
+		return nil, status, buf.Bytes(), nil
 	}
 
-	respTypeId, respPayload, err = gopgio.ReadFrame(resp.Body)
-	return respTypeId, respPayload, status, err
+	if frames, err = gopgio.ReadFrames(resp.Body); err != nil {
+		return nil, status, nil, err
+	}
+	return frames, status, nil, nil
 }
 
-func printResponse(typeId int32, payload []byte, byTypeId map[int32]protoreflect.MessageDescriptor) {
+// printFrame 打一帧。一次响应可能是多帧（服务端把多个模块的响应一起发回来），
+// 所以带上 [i/n] 前缀；只有一帧时不加，保持平时的样子。
+func printFrame(idx, total int, f gopgio.Frame, byTypeId map[int32]protoreflect.MessageDescriptor) {
+	typeId, payload := f.TypeId, f.Payload
+
+	arrow := "←"
+	if total > 1 {
+		arrow = fmt.Sprintf("← [%d/%d]", idx+1, total)
+	}
+
 	md, ok := byTypeId[typeId]
 	if !ok {
-		fmt.Printf("← typeId=%-4d no protocol registered, raw %s\n", typeId, hex.EncodeToString(payload))
+		fmt.Printf("%s typeId=%-4d no protocol registered, raw %s\n", arrow, typeId, hex.EncodeToString(payload))
 		return
 	}
 
 	m := dynamicpb.NewMessage(md)
 	if err := proto.Unmarshal(payload, m); err != nil {
-		fmt.Printf("← %s typeId=%d cannot decode: %v, raw %s\n", md.Name(), typeId, err, hex.EncodeToString(payload))
+		fmt.Printf("%s %s typeId=%d cannot decode: %v, raw %s\n", arrow, md.Name(), typeId, err, hex.EncodeToString(payload))
 		return
 	}
 
-	fmt.Printf("← %-24s typeId=%-4d %d bytes\n", md.Name(), typeId, len(payload))
+	fmt.Printf("%s %-24s typeId=%-4d %d bytes\n", arrow, md.Name(), typeId, len(payload))
 
 	// 用 prototext 不用 protojson：int64 在 JSON 里会被渲染成字符串，时间戳看着别扭
 	out, err := prototext.MarshalOptions{Multiline: true, Indent: "  "}.Marshal(m)

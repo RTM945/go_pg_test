@@ -1,0 +1,259 @@
+package login
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"go_pg_test/app/test/msg"
+	"go_pg_test/app/test/ptable"
+	"go_pg_test/common/db"
+	"go_pg_test/common/redis"
+	"go_pg_test/common/server"
+	"go_pg_test/common/token"
+	"pdbgen/dbpool"
+	"time"
+)
+
+const (
+	extToken     int32 = 1
+	extChannel   int32 = 2
+	extPackageID int32 = 3
+	extPreID     int32 = 4
+	extUDID      int32 = 5
+
+	refreshGrace = time.Minute // 轮换后，旧 token 仍可用一小段时间
+
+	refreshTTL  = 30 * 24 * time.Hour
+	maxFieldLen = 128
+)
+
+var (
+	ErrTokenInvalid  = errors.New("refresh token invalid")  // -> 401 TOKEN_INVALID，客户端回到 SDK 登录
+	ErrLoginFailed   = errors.New("login failed")           // SDK 校验不通过 -> 401 LOGIN_FAILED
+	ErrAccountBanned = errors.New("account banned")         // -> 403 ACCOUNT_BANNED
+	ErrPlatBusy      = errors.New("platform unavailable")   // 平台接口超时/故障 -> 503 BUSY
+	ErrClientTooOld  = errors.New("client version too old") // -> 426 CLIENT_TOO_OLD
+)
+
+// login token: 放在redis, 用于鉴权，拿出uid，每次登录操作后
+
+func ProcessLogin(ctx context.Context, req *msg.Login) error {
+	deviceID := req.Ext[extUDID]
+	// 用于自动登录的token
+	refreshToken := req.Ext[extToken]
+	if req.Plat == "" || req.Account == "" || deviceID == "" {
+		return fmt.Errorf("%w: bad login params", server.ErrMalformedPayload)
+	}
+	if err := checkClientVersion(req.ClientVersion); err != nil {
+		return err
+	}
+	v, ok := verifiers[req.Plat]
+	if !ok {
+		return fmt.Errorf("%w: unsupported plat %q", server.ErrMalformedPayload, req.Plat)
+	}
+	// TODO: 按 IP / account 限流
+
+	if refreshToken != "" {
+		// 有传refreshToken 自动登录 一定是老用户
+		return autoLogin(ctx, req, v, deviceID, refreshToken)
+	}
+	// 手动登录
+	return sdkLogin(ctx, req, v, deviceID)
+}
+
+func sdkLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID string) error {
+	// 事务外：向平台校验凭证
+	platUID, err := v.Verify(ctx, req.Account, req.Ext)
+	if err != nil {
+		return err
+	}
+	platform := v.PlatformID()
+
+	refreshToken := token.New32()
+	refreshExp := time.Now().Add(refreshTTL)
+	uid, created, err := findOrCreateAccount(ctx, platform, platUID, deviceID, refreshToken, refreshExp)
+	if err != nil {
+		return err
+	}
+
+	// 老玩家（含排队期间别人刚建好的）：另起事务加 uid 锁
+	if !created {
+		err = db.WithUserLock(ctx, uid, func(ctx context.Context) error {
+			user := ptable.UserTable.GetById(ctx, uid)
+			if user == nil {
+				return fmt.Errorf("user %d not found", uid)
+			}
+			if user.Status() != 0 {
+				return ErrAccountBanned
+			}
+			upsertRefreshToken(ctx, uid, deviceID, refreshToken, refreshExp)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	// 事务已提交，再发登录 token（顶号发生在这里）
+	loginToken, err := redis.IssueLoginToken(ctx, uid, deviceID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func autoLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID, refreshToken string) error {
+	// plat + account 找到 uid 不信任客户端传的uid
+	uid, err := findUIDByIdentity(ctx, v.PlatformID(), req.Account)
+	if err != nil {
+		return err
+	}
+	if uid == 0 {
+		return ErrTokenInvalid
+	}
+	newRefreshToken := token.New32()
+	newExp := time.Now().Add(refreshTTL)
+
+	err = db.WithUserLock(ctx, uid, func(ctx context.Context) error {
+		now := time.Now()
+		userRefreshToken := ptable.UserRefreshTokenTable.SelectByUidDeviceId(ctx, uid, deviceID)
+		if userRefreshToken == nil || userRefreshToken.RevokedAt() != 0 || now.Unix() >= userRefreshToken.ExpiresAt() {
+			return ErrTokenInvalid
+		}
+
+		keepPrev := false
+		switch {
+		case refreshToken == userRefreshToken.TokenHash():
+			// 正常
+		case len(userRefreshToken.PrevTokenHash()) > 0 &&
+			refreshToken == userRefreshToken.PrevTokenHash() &&
+			now.Unix()-userRefreshToken.RotatedAt() <= int64(refreshGrace/time.Second):
+			keepPrev = true // 上次的响应丢了，客户端手里还是旧 token
+		default:
+			return ErrTokenInvalid
+		}
+
+		// token 通过之后才检查封禁，避免没有凭证的人探测出账号状态
+		user := ptable.UserTable.GetById(ctx, uid)
+		if user == nil {
+			return fmt.Errorf("user %d not found", uid)
+		}
+		if user.Status() != 0 {
+			return ErrAccountBanned
+		}
+		user.SetLastLoginAt(now.Unix())
+
+		// 轮换：当前 token 挪到 prev（keepPrev 时 prev 保持不变）
+		if !keepPrev {
+			userRefreshToken.SetPrevTokenHash(userRefreshToken.TokenHash())
+		}
+		userRefreshToken.SetTokenHash(newRefreshToken)
+		userRefreshToken.SetRotatedAt(now.Unix())
+		userRefreshToken.SetExpiresAt(newExp.Unix())
+
+		// todo 登录成功 登录后业务
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	loginToken, err := redis.IssueLoginToken(ctx, uid, deviceID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// 返回 0 表示没有这个身份
+func findUIDByIdentity(ctx context.Context, platform int16, platUID string) (uid int64, err error) {
+	err = dbpool.Query(ctx, func(ctx context.Context) error {
+		if ident := ptable.UserIdentityTable.SelectByPlatformPlatformUID(ctx, platform, platUID); ident != nil {
+			uid = ident.Uid()
+		}
+		return nil
+	})
+	return uid, err
+}
+
+func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID, refreshToken string, refreshExp time.Time) (int64, bool, error) {
+	var uid int64
+	var created bool
+	var err error
+	// 1. 先无锁查，绝大多数登录在这里就结束
+	err = dbpool.Query(ctx, func(ctx context.Context) error {
+		if ident := ptable.UserIdentityTable.SelectByPlatformPlatformUID(ctx, platform, platUID); ident != nil {
+			uid = ident.Uid()
+		}
+		return nil
+	})
+	if err != nil || uid != 0 {
+		return uid, false, err
+	}
+
+	// 2. 没查到：按身份加 named lock，事务内再查一次，再建
+	lockValue := db.HashLockNS(fmt.Sprintf("%d:%s", platform, platUID))
+	err = db.WithNamedLock(ctx, "identity", lockValue, func(ctx context.Context) error {
+		if ident := ptable.UserIdentityTable.SelectByPlatformPlatformUID(ctx, platform, platUID); ident != nil {
+			uid = ident.Uid() // 排队期间别人已经建好了
+			return nil
+		}
+
+		now := time.Now().Unix()
+		user := ptable.NewUser()
+		user.SetRequestToken(token.New32())
+		user.SetCreatedAt(now)
+		ptable.UserTable.Insert(ctx, user)
+		newUID := user.Id()
+		if newUID == 0 {
+			return errors.New("insert user returned id 0")
+		}
+
+		ident := ptable.NewUserIdentity()
+		ident.SetUid(newUID)
+		ident.SetPlatform(platform)
+		ident.SetPlatformUID(platUID)
+		ident.SetCreatedAt(now)
+		ptable.UserIdentityTable.Insert(ctx, ident)
+
+		// 免登录行也要在这个事务里建，否则首次登录后没法免登录
+		insertRefreshToken(ctx, uid, deviceID, refreshToken, refreshExp)
+
+		uid, created = newUID, true
+		return nil
+	})
+	return uid, created, err
+}
+
+func checkClientVersion(v string) error {
+	// TODO: 过旧返回 ErrClientTooOld
+	return nil
+}
+
+// ---- 免登录 token 表 ----
+// 调用方必须已持有 uid 锁；或者 uid 是刚建的新号（没有竞争）
+func insertRefreshToken(ctx context.Context, uid int64, deviceID string, refreshToken string, exp time.Time) *ptable.UserRefreshToken {
+	row := ptable.NewUserRefreshToken()
+	row.SetUid(uid)
+	row.SetDeviceId(deviceID)
+	row.SetTokenHash(refreshToken)
+	row.SetRotatedAt(time.Now().Unix())
+	row.SetExpiresAt(exp.Unix())
+	ptable.UserRefreshTokenTable.Insert(ctx, row)
+	return row
+}
+
+// SDK 登录：整行覆盖，清掉 prev 和作废标记。
+// 没有 ON CONFLICT，所以先查后写；同一 (uid, device) 的写都在 uid 锁内，不会并发。
+func upsertRefreshToken(ctx context.Context, uid int64, deviceID string, refreshToken string, exp time.Time) {
+	row := ptable.UserRefreshTokenTable.SelectByUidDeviceId(ctx, uid, deviceID)
+	if row == nil {
+		row = insertRefreshToken(ctx, uid, deviceID, refreshToken, exp)
+	}
+	row.SetTokenHash(refreshToken)
+	row.SetPrevTokenHash("") // 必须清，否则作废前的旧 token 在宽限期内还能用
+	row.SetRotatedAt(time.Now().Unix())
+	row.SetExpiresAt(exp.Unix())
+	row.SetRevokedAt(0)
+}

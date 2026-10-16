@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+// 目录 proto/test/ 对应的 app 是 app/test，生成到 genpb/test（package testpb）。
+// 目录名和 go_package 必须对得上，不一致很难查。
+option go_package = "go_pg_test/genpb/test;testpb";
+
+import "ext.proto";
+
+message Login {
+  option (proto.type_id) = 101;
+
+  string plat = 1;
+  string account = 2;
+  map<int32, string> ext = 3;
+  int32 loginServerId = 4;
+  string clientVersion = 5;
+}
+
+

@@ -82,15 +82,23 @@ func roundTrip(t *testing.T, req, resp io.Msg) {
 		t.Fatalf("HTTP %d: %s", httpResp.StatusCode, strings.TrimSpace(buf.String()))
 	}
 
-	respTypeId, respPayload, err := io.ReadFrame(httpResp.Body)
+	// 响应可能不止一帧（一次请求触发多个模块时服务端会一起发回来），
+	// 客户端一律循环读到流尾，不为"批"单独走一条路。
+	frames, err := io.ReadFrames(httpResp.Body)
 	if err != nil {
 		t.Fatalf("响应的帧读不出来: %v", err)
 	}
-	if err := resp.Read(respPayload); err != nil {
-		t.Fatalf("响应解不出 %T: %v，字节 %s", resp, err, hex.EncodeToString(respPayload))
+	if len(frames) == 0 {
+		t.Fatalf("服务器一帧都没回")
+	}
+	for i, f := range frames {
+		t.Logf("← [%d/%d] typeId=%d payload=%s", i+1, len(frames), f.TypeId, hex.EncodeToString(f.Payload))
 	}
 
-	t.Logf("← %T typeId=%d payload=%s", resp, respTypeId, hex.EncodeToString(respPayload))
+	if err := resp.Read(frames[0].Payload); err != nil {
+		t.Fatalf("响应解不出 %T: %v，字节 %s", resp, err, hex.EncodeToString(frames[0].Payload))
+	}
+	t.Logf("%v", resp)
 }
 
 func marshal(t *testing.T, m io.Msg) []byte {

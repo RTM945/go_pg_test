@@ -90,3 +90,114 @@ func TestReadFrameMalformed(t *testing.T) {
 		})
 	}
 }
+
+func TestReadFramesSingle(t *testing.T) {
+	frames, err := ReadFrames(bytes.NewReader(encodeFrame(123, []byte{0x08, 0x2a})))
+	if err != nil {
+		t.Fatalf("ReadFrames() error = %v", err)
+	}
+	if len(frames) != 1 || frames[0].TypeId != 123 || !bytes.Equal(frames[0].Payload, []byte{0x08, 0x2a}) {
+		t.Errorf("frames = %+v", frames)
+	}
+}
+
+// 响应侧和请求侧的区别就在这：多帧是正常的，不是"多余字节"。
+// ReadFrame 对同样的字节会报错，ReadFrames 不会。
+func TestReadFramesMultiple(t *testing.T) {
+	body := append(append(encodeFrame(123, []byte{1}), encodeFrame(124, []byte{2, 3})...),
+		encodeFrame(125, nil)...)
+
+	frames, err := ReadFrames(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("ReadFrames() error = %v", err)
+	}
+	want := []struct {
+		typeId  int32
+		payload []byte
+	}{{123, []byte{1}}, {124, []byte{2, 3}}, {125, nil}}
+
+	if len(frames) != len(want) {
+		t.Fatalf("读到 %d 帧，want %d", len(frames), len(want))
+	}
+	for i, w := range want {
+		if frames[i].TypeId != w.typeId || !bytes.Equal(frames[i].Payload, w.payload) {
+			t.Errorf("frames[%d] = {%d, %x}, want {%d, %x}", i, frames[i].TypeId, frames[i].Payload, w.typeId, w.payload)
+		}
+	}
+
+	// 同样的字节喂给严格单帧的 ReadFrame 应该报"多余字节"
+	if _, _, err := ReadFrame(bytes.NewReader(body)); err == nil {
+		t.Error("ReadFrame 对多帧应该报错")
+	}
+}
+
+func TestReadFramesEmptyStream(t *testing.T) {
+	frames, err := ReadFrames(bytes.NewReader(nil))
+	if err != nil {
+		t.Fatalf("空流不该报错: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Errorf("空流读到 %d 帧", len(frames))
+	}
+}
+
+// 恰好在帧边界结束 = 正常收尾；读到半个包才是坏的。这两者靠 EOF 和
+// ErrUnexpectedEOF 区分，错了就会把网络截断当成"正常结束"。
+func TestReadFramesTruncatedIsError(t *testing.T) {
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{"半个包头", encodeFrame(123, []byte{1, 2, 3})[:5]},
+		{"半个包体", encodeFrame(123, []byte{1, 2, 3})[:FrameHeaderSize+1]},
+		{"第二帧只写了一半", append(encodeFrame(123, []byte{1}), encodeFrame(124, []byte{2, 3})[:6]...)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frames, err := ReadFrames(bytes.NewReader(tt.body))
+			if err == nil {
+				t.Fatalf("被截断了却当成正常结束，读到 %d 帧", len(frames))
+			}
+			if !errors.Is(err, ErrMalformedFrame) {
+				t.Errorf("error = %v, want ErrMalformedFrame", err)
+			}
+		})
+	}
+}
+
+func TestReadFramesTooMany(t *testing.T) {
+	var body []byte
+	for range MaxFrames + 1 {
+		body = append(body, encodeFrame(123, []byte{1})...)
+	}
+	if _, err := ReadFrames(bytes.NewReader(body)); err == nil {
+		t.Fatal("超过帧数上限却没过")
+	}
+}
+
+// AppendFrame 和 WriteFrame 必须产出一模一样的字节——包头布局只有一处定义
+func TestAppendFrameMatchesWriteFrame(t *testing.T) {
+	payload := []byte{0x08, 0x2a}
+
+	var buf bytes.Buffer
+	if err := WriteFrame(&buf, 123, payload); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := AppendFrame(nil, 123, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, buf.Bytes()) {
+		t.Errorf("AppendFrame = %x, WriteFrame = %x", got, buf.Bytes())
+	}
+
+	// 追加语义：拼多帧就是连着 Append
+	both, err := AppendFrame(got, 124, []byte{9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(append([]byte{}, buf.Bytes()...), encodeFrame(124, []byte{9})...); !bytes.Equal(both, want) {
+		t.Errorf("连续 Append = %x, want %x", both, want)
+	}
+}

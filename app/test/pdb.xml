@@ -9,33 +9,51 @@
      lockTimeoutMs="1000" transactionTimeoutMs="5000"
      showSQL="true"
      appName="lobby-svc">
-    <!--
-    CREATE TABLE IF NOT EXISTS users (
-        id            BIGINT NOT NULL,
-        name          TEXT NOT NULL,
-        last_login_at BIGINT NOT NULL,
-        created_at    BIGINT NOT NULL,
-        token         TEXT NOT NULL
-    );
 
-    ALTER TABLE user
-        ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (START WITH 1000),
-        ADD CONSTRAINT pk_user PRIMARY KEY (id);
-
-    CREATE INDEX index_token ON users (token);
-
-    CREATE INDEX joint_index_id_token ON users (id,token);
-    -->
-    <bean name="user">
+    <bean name="User">
         <variable name="id" type="int64"/>
-        <variable name="name" type="string"/>
-        <variable name="lastLoginAt" type="int64"/>
+        <variable name="name" type="string"/> 角色名
+        <variable name="status" type="int16"/> 是否封禁 0正常 1封禁
         <variable name="createdAt" type="int64"/>
-        <variable name="token" type="string"/>
+        <variable name="lastLoginAt" type="int64"/>
+        <variable name="totalCharge" type="int64"/>    累计充值
+        <variable name="firstChargeAt" type="int64"/>     0 = 未首充
+        <variable name="request_token" type="string"/> 每次请求轮换
     </bean>
-    <table name="user" bean="user">
+    <table name="user" bean="User">
         <primaryKey variable="id" autoIncrement="true" start="1000"/>
     </table>
+
+    <bean name="UserIdentity"> 第三方身份绑定 (sdk登录用)
+        <variable name="id" type="int64"/>
+        <variable name="platform" type="int16"/> 平台枚举
+        <variable name="platformUID" type="string"/> 平台返回的open_id 内网测试则是手填的账号/邀请码
+        <variable name="uid" type="int64"/> 关联的uid
+        <variable name="createdAt" type="int64"/>
+    </bean>
+    <table name="user_identity" bean="UserIdentity">
+        <primaryKey variable="id" autoIncrement="true"/>
+        <index variable="uid" unique="false"/>
+        <index variable="platform,platformUID" unique="true"/>
+    </table>
+
+    <bean name="UserRefreshToken"> 免登录token 每个设备一行
+        <variable name="id" type="int64"/>
+        <variable name="uid" type="int64"/> 关联的uid
+        <variable name="deviceId" type="string"/> 设备id
+        <variable name="tokenHash" type="string"/>
+        <variable name="prevTokenHash" type="string"/> 上一个token的hash 每次免登录成功轮换token 如果新token丢了 允许一定时间内用旧token
+        <variable name="rotatedAt" type="int64"/> 上次轮换时间 用来判断prev是否在宽限期内
+        <variable name="expiresAt" type="int64"/> 绝对过期时间 比如创建后30天 每次轮换时延 活跃玩家就不用重新sdk登录
+        <variable name="revokedAt" type="int64"/> 非0表示作废 改密码 玩家登出 封禁时设置一下now 新设备因为deviceId不同另起一行 旧设备因为sdk登录会覆盖这一行
+    </bean>
+
+    <table name="user_refresh_token" bean="UserRefreshToken">
+        <primaryKey variable="id" autoIncrement="true"/>
+        <index variable="uid, deviceId" unique="true"/>
+        <index variable="tokenHash" unique="true"/>
+    </table>
+
 
     <bean name="RedEnvelope">
         <variable name="id" type="int64"/> 自增
