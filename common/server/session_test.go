@@ -1,21 +1,23 @@
-package io
+package server
 
 import (
 	"bytes"
 	"net/http/httptest"
 	"testing"
+
+	"go_pg_test/io"
 )
 
 // fakeMsg 一个最小的 Msg，用来单测 Session 的攒帧/发送。
 type fakeMsg struct {
-	session *Session
+	session io.Session
 	typeId  int32
 	payload []byte
 	size    int // 非 0 时假装 Size() 是这个值，用来测长度对不上的情况
 }
 
-func (m *fakeMsg) SetSession(s *Session)       { m.session = s }
-func (m *fakeMsg) Session() *Session           { return m.session }
+func (m *fakeMsg) SetSession(s io.Session)     { m.session = s }
+func (m *fakeMsg) Session() io.Session         { return m.session }
 func (m *fakeMsg) TypeId() int32               { return m.typeId }
 func (m *fakeMsg) Size() int                   { return max(m.size, len(m.payload)) }
 func (m *fakeMsg) Read(b []byte) error         { m.payload = append(m.payload[:0], b...); return nil }
@@ -25,7 +27,7 @@ func (m *fakeMsg) Write(b []byte) (int, error) { return copy(b, m.payload), nil 
 // 那条保证的落点——业务跑到一半发出去了，回滚就撤不回来了。
 func TestSessionWriteOnlyAccumulates(t *testing.T) {
 	rec := httptest.NewRecorder()
-	s := &Session{UID: 1003, W: rec}
+	s := NewSession(rec, nil)
 
 	if err := s.Write(&fakeMsg{typeId: 123, payload: []byte{0x08, 0x2a}}); err != nil {
 		t.Fatalf("Write() error = %v", err)
@@ -43,7 +45,7 @@ func TestSessionWriteOnlyAccumulates(t *testing.T) {
 // 客户端收到的是错误状态码，而不是一个已经回滚了的"成功"响应。
 func TestSessionNotFlushedWritesNothing(t *testing.T) {
 	rec := httptest.NewRecorder()
-	s := &Session{W: rec}
+	s := NewSession(rec, nil)
 
 	if err := s.Write(&fakeMsg{typeId: 123, payload: []byte{1, 2, 3}}); err != nil {
 		t.Fatal(err)
@@ -58,7 +60,7 @@ func TestSessionNotFlushedWritesNothing(t *testing.T) {
 // 攒多帧一次写出，客户端循环读能原样读回来——一次请求触发多个模块时就是这样。
 func TestSessionFlushMultipleFrames(t *testing.T) {
 	rec := httptest.NewRecorder()
-	s := &Session{UID: 1003, W: rec}
+	s := NewSession(rec, nil)
 
 	msgs := []*fakeMsg{
 		{typeId: 123, payload: []byte{0x08, 0x2a}},
@@ -78,7 +80,7 @@ func TestSessionFlushMultipleFrames(t *testing.T) {
 		t.Fatalf("Flush() error = %v", err)
 	}
 
-	frames, err := ReadFrames(bytes.NewReader(rec.Body.Bytes()))
+	frames, err := io.ReadFrames(bytes.NewReader(rec.Body.Bytes()))
 	if err != nil {
 		t.Fatalf("ReadFrames() error = %v，字节 %x", err, rec.Body.Bytes())
 	}
@@ -100,7 +102,7 @@ func TestSessionFlushMultipleFrames(t *testing.T) {
 
 func TestSessionFlushNothingIsNoop(t *testing.T) {
 	rec := httptest.NewRecorder()
-	s := &Session{W: rec}
+	s := NewSession(rec, nil)
 
 	if err := s.Flush(); err != nil {
 		t.Fatalf("空 Flush() error = %v", err)
@@ -114,7 +116,7 @@ func TestSessionFlushNothingIsNoop(t *testing.T) {
 // 客户端解不出来还查不到原因。
 func TestSessionWriteSizeMismatch(t *testing.T) {
 	rec := httptest.NewRecorder()
-	s := &Session{W: rec}
+	s := NewSession(rec, nil)
 
 	err := s.Write(&fakeMsg{typeId: 123, payload: []byte{1, 2, 3}, size: 10})
 	if err == nil {

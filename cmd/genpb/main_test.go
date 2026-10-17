@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -29,6 +30,68 @@ func newFiles(t *testing.T, fds ...*descriptorpb.FileDescriptorProto) *protoregi
 		t.Fatalf("protodesc.NewFiles: %v", err)
 	}
 	return files
+}
+
+// loadDescriptors 必须能在没有任何生成代码的情况下工作：生成器一旦依赖
+// genpb/common，生成物缺失时自己就编不过。
+func TestLoadDescriptorsWithoutGeneratedCode(t *testing.T) {
+	// ext.proto: extend google.protobuf.MessageOptions { int32 type_id = 51234; }
+	extProto := &descriptorpb.FileDescriptorProto{
+		Name:       new("ext.proto"),
+		Package:    new("proto"),
+		Syntax:     new("proto3"),
+		Dependency: []string{"google/protobuf/descriptor.proto"},
+		Extension: []*descriptorpb.FieldDescriptorProto{{
+			Name:     new("type_id"),
+			Number:   new(int32(51234)),
+			Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:     descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum(),
+			Extendee: new(".google.protobuf.MessageOptions"),
+		}},
+	}
+
+	// type_id 以 unknown fields 的形式写进 options，等价于扩展未注册时的解析结果。
+	opts := &descriptorpb.MessageOptions{}
+	raw := protowire.AppendTag(nil, 51234, protowire.VarintType)
+	opts.ProtoReflect().SetUnknown(protowire.AppendVarint(raw, 101))
+
+	testProto := &descriptorpb.FileDescriptorProto{
+		Name:       new("test/a.proto"),
+		Package:    new("test"),
+		Syntax:     new("proto3"),
+		Dependency: []string{"ext.proto"},
+		Options:    fileOptions("go_pg_test/genpb/test;testpb"),
+		MessageType: []*descriptorpb.DescriptorProto{{
+			Name:    new("Msg"),
+			Options: opts,
+		}},
+	}
+
+	fds := &descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{
+		protodesc.ToFileDescriptorProto(descriptorpb.File_google_protobuf_descriptor_proto),
+		extProto,
+		testProto,
+	}}
+	rawSet, err := proto.Marshal(fds)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, extType, err := loadDescriptors(rawSet)
+	if err != nil {
+		t.Fatalf("loadDescriptors() error = %v", err)
+	}
+	fd, err := files.FindFileByPath("test/a.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgOpts := fd.Messages().ByName("Msg").Options()
+	if !hasTypeId(msgOpts, extType) {
+		t.Fatal("hasTypeId() = false, want true")
+	}
+	if got := proto.GetExtension(msgOpts, extType).(int32); got != 101 {
+		t.Errorf("type_id = %d, want 101", got)
+	}
 }
 
 func TestCollectTypeIds(t *testing.T) {

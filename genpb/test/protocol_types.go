@@ -4,6 +4,8 @@ package testpb
 
 const PROTOCOL_TYPE_Login int32 = 101
 
+const PROTOCOL_TYPE_LoginResult int32 = 102
+
 const PROTOCOL_TYPE_CRedEnvelope int32 = 123
 
 const PROTOCOL_TYPE_SRedEnvelope int32 = 124

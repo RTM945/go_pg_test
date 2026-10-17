@@ -18,7 +18,7 @@
         <variable name="lastLoginAt" type="int64"/>
         <variable name="totalCharge" type="int64"/>    累计充值
         <variable name="firstChargeAt" type="int64"/>     0 = 未首充
-        <variable name="request_token" type="string"/> 每次请求轮换
+        <variable name="requestToken" type="string"/> 每次请求轮换
     </bean>
     <table name="user" bean="User">
         <primaryKey variable="id" autoIncrement="true" start="1000"/>
@@ -41,8 +41,8 @@
         <variable name="id" type="int64"/>
         <variable name="uid" type="int64"/> 关联的uid
         <variable name="deviceId" type="string"/> 设备id
-        <variable name="tokenHash" type="string"/>
-        <variable name="prevTokenHash" type="string"/> 上一个token的hash 每次免登录成功轮换token 如果新token丢了 允许一定时间内用旧token
+        <variable name="token" type="string"/> refreshToken 每次轮换
+        <variable name="prevToken" type="string"/> 上一个token的hash 每次免登录成功轮换token 如果新token丢了 允许一定时间内用旧token
         <variable name="rotatedAt" type="int64"/> 上次轮换时间 用来判断prev是否在宽限期内
         <variable name="expiresAt" type="int64"/> 绝对过期时间 比如创建后30天 每次轮换时延 活跃玩家就不用重新sdk登录
         <variable name="revokedAt" type="int64"/> 非0表示作废 改密码 玩家登出 封禁时设置一下now 新设备因为deviceId不同另起一行 旧设备因为sdk登录会覆盖这一行
@@ -51,7 +51,7 @@
     <table name="user_refresh_token" bean="UserRefreshToken">
         <primaryKey variable="id" autoIncrement="true"/>
         <index variable="uid, deviceId" unique="true"/>
-        <index variable="tokenHash" unique="true"/>
+        <index variable="token" unique="true"/>
     </table>
 
 

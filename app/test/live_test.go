@@ -16,9 +16,11 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"go_pg_test/app/test/msg"
 	"go_pg_test/io"
@@ -26,7 +28,66 @@ import (
 
 const liveAddr = "http://127.0.0.1:8080"
 
-// uid 现在传不了——服务器那边硬编码 1003，见 main.go 里"从 header 的 token 取 uid"那条 todo。
+// liveSession 整个测试进程只登录一次，后续请求复用这套 token。
+var liveSession struct {
+	ready      bool
+	loginToken string
+	reqToken   string
+}
+
+// ensureLogin 拿一个 test 平台的随机账号做 SDK 登录。
+// 用户侧协议要走鉴权，所以 live test 不能再直接裸发请求。
+func ensureLogin(t *testing.T) {
+	t.Helper()
+	if liveSession.ready {
+		return
+	}
+
+	login := msg.NewLogin()
+	login.Plat = "test"
+	login.Account = fmt.Sprintf("live-%d", time.Now().UnixNano())
+	login.ClientVersion = "live"
+	login.Ext = map[int32]string{5: "live-device"}
+
+	var frame bytes.Buffer
+	if err := io.WriteFrame(&frame, login.TypeId(), marshal(t, login)); err != nil {
+		t.Fatalf("拼登录帧失败: %v", err)
+	}
+	httpReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, liveAddr+"/", &frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("登录失败，服务器起了吗（%s）: %v", liveAddr, err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		var body bytes.Buffer
+		_, _ = body.ReadFrom(httpResp.Body)
+		t.Fatalf("登录 HTTP %d: %s", httpResp.StatusCode, strings.TrimSpace(body.String()))
+	}
+	liveSession.loginToken = httpResp.Header.Get("X-Login-Token")
+	liveSession.reqToken = httpResp.Header.Get("X-Request-Token")
+	if liveSession.loginToken == "" || liveSession.reqToken == "" {
+		t.Fatalf("登录响应缺 token header: login=%q req=%q",
+			liveSession.loginToken, liveSession.reqToken)
+	}
+	frames, err := io.ReadFrames(httpResp.Body)
+	if err != nil {
+		t.Fatalf("登录响应读不出来: %v", err)
+	}
+	if len(frames) == 0 {
+		t.Fatal("登录响应没有 LoginResult")
+	}
+	result := msg.NewLoginResult()
+	if err := result.Read(frames[0].Payload); err != nil {
+		t.Fatalf("LoginResult 解不出来: %v", err)
+	}
+	liveSession.ready = true
+	t.Logf("login ok: uid=%d loginToken=%s reqToken=%s", result.Uid, liveSession.loginToken, liveSession.reqToken)
+}
 
 // 领红包。
 func Test_CRedEnvelopeClick(t *testing.T) {
@@ -61,6 +122,7 @@ func Test_CRedEnvelope(t *testing.T) {
 // roundTrip 按封包格式发一帧、读回一帧解进 resp，两个方向的字节都打出来。
 func roundTrip(t *testing.T, req, resp io.Msg) {
 	t.Helper()
+	ensureLogin(t)
 
 	payload := marshal(t, req)
 	var frame bytes.Buffer
@@ -70,11 +132,24 @@ func roundTrip(t *testing.T, req, resp io.Msg) {
 
 	t.Logf("→ %T typeId=%d payload=%s", req, req.TypeId(), hex.EncodeToString(payload))
 
-	httpResp, err := http.Post(liveAddr+"/", "application/octet-stream", &frame)
+	httpReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, liveAddr+"/", &frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpReq.Header.Set("Content-Type", "application/octet-stream")
+	httpReq.Header.Set("Authorization", "Bearer "+liveSession.loginToken)
+	httpReq.Header.Set("X-Request-Token", liveSession.reqToken)
+
+	httpResp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		t.Fatalf("发不出去，服务器起了吗（%s）: %v", liveAddr, err)
 	}
 	defer httpResp.Body.Close()
+
+	// 成功响应会下发下一个 requestToken，客户端必须接着用新的。
+	if next := httpResp.Header.Get("X-Request-Token"); next != "" {
+		liveSession.reqToken = next
+	}
 
 	if httpResp.StatusCode != http.StatusOK {
 		var buf bytes.Buffer

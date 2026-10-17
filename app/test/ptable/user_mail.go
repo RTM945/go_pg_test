@@ -155,6 +155,18 @@ func (o *Mail) ResetToLoaded() {
 	o.dirty = 0
 }
 
+// TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
+// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+func (o *Mail) TableName() string {
+	return "user_mail"
+}
+
+// Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
+// 表示这个对象还没有身份。
+func (o *Mail) Identity() int64 {
+	return o.id
+}
+
 const selectColumnsMail = "id, uid, conf_id, state, receive_at, params, award_list"
 
 func scanMail(s dbctx.Scanner) (*Mail, error) {
@@ -195,7 +207,7 @@ func (o mail) getId(
 	id int64,
 ) *Mail {
 	const query = "SELECT " + selectColumnsMail +
-		" FROM user_mail" +
+		" FROM \"user_mail\"" +
 		" WHERE id = $1"
 	return dbctx.QueryOne(ctx, q, query, scanMail, id)
 }
@@ -228,7 +240,7 @@ func (o mail) listUidConfId(
 	uid int64, confId int32,
 ) []*Mail {
 	const query = "SELECT " + selectColumnsMail +
-		" FROM user_mail" +
+		" FROM \"user_mail\"" +
 		" WHERE uid = $1 AND conf_id = $2"
 	return dbctx.QueryList(ctx, q, query, scanMail, uid, confId)
 }
@@ -260,7 +272,7 @@ func (o mail) getAll(
 	q dbctx.Querier,
 ) []*Mail {
 	const query = "SELECT " + selectColumnsMail +
-		" FROM user_mail"
+		" FROM \"user_mail\""
 	return dbctx.QueryList(ctx, q, query, scanMail)
 }
 
@@ -288,7 +300,7 @@ func (v *Mail) FlushStmt() (string, []any) {
 	}
 	var sb strings.Builder
 	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE user_mail SET ")
+	sb.WriteString("UPDATE \"user_mail\" SET ")
 	if v.dirty&dirtyMailUid != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
@@ -381,7 +393,7 @@ func (o mail) Insert(
 	v *Mail,
 ) {
 	tx := dbctx.TxFromCtx(ctx)
-	const query = "INSERT INTO user_mail " +
+	const query = "INSERT INTO \"user_mail\" " +
 		"(uid, conf_id, state, receive_at, params, award_list) " +
 		"VALUES ($1, $2, $3, $4, $5, $6)" +
 		" RETURNING id"

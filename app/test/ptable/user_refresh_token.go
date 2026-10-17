@@ -18,33 +18,33 @@ var UserRefreshTokenTable userRefreshToken
 type userRefreshToken struct{}
 
 const (
-	dirtyUserRefreshTokenUid           uint64 = 1 << 0
-	dirtyUserRefreshTokenDeviceId      uint64 = 1 << 1
-	dirtyUserRefreshTokenTokenHash     uint64 = 1 << 2
-	dirtyUserRefreshTokenPrevTokenHash uint64 = 1 << 3
-	dirtyUserRefreshTokenRotatedAt     uint64 = 1 << 4
-	dirtyUserRefreshTokenExpiresAt     uint64 = 1 << 5
-	dirtyUserRefreshTokenRevokedAt     uint64 = 1 << 6
+	dirtyUserRefreshTokenUid       uint64 = 1 << 0
+	dirtyUserRefreshTokenDeviceId  uint64 = 1 << 1
+	dirtyUserRefreshTokenToken     uint64 = 1 << 2
+	dirtyUserRefreshTokenPrevToken uint64 = 1 << 3
+	dirtyUserRefreshTokenRotatedAt uint64 = 1 << 4
+	dirtyUserRefreshTokenExpiresAt uint64 = 1 << 5
+	dirtyUserRefreshTokenRevokedAt uint64 = 1 << 6
 )
 
 type UserRefreshToken struct {
-	id                int64
-	uid               int64
-	deviceId          string
-	tokenHash         string
-	prevTokenHash     string
-	rotatedAt         int64
-	expiresAt         int64
-	revokedAt         int64
-	loaded            bool
-	origUid           int64
-	origDeviceId      string
-	origTokenHash     string
-	origPrevTokenHash string
-	origRotatedAt     int64
-	origExpiresAt     int64
-	origRevokedAt     int64
-	dirty             uint64
+	id            int64
+	uid           int64
+	deviceId      string
+	token         string
+	prevToken     string
+	rotatedAt     int64
+	expiresAt     int64
+	revokedAt     int64
+	loaded        bool
+	origUid       int64
+	origDeviceId  string
+	origToken     string
+	origPrevToken string
+	origRotatedAt int64
+	origExpiresAt int64
+	origRevokedAt int64
+	dirty         uint64
 }
 
 func NewUserRefreshToken() *UserRefreshToken {
@@ -55,29 +55,29 @@ func loadedUserRefreshToken(
 	id int64,
 	uid int64,
 	deviceId string,
-	tokenHash string,
-	prevTokenHash string,
+	token string,
+	prevToken string,
 	rotatedAt int64,
 	expiresAt int64,
 	revokedAt int64,
 ) *UserRefreshToken {
 	return &UserRefreshToken{
-		id:                id,
-		uid:               uid,
-		deviceId:          deviceId,
-		tokenHash:         tokenHash,
-		prevTokenHash:     prevTokenHash,
-		rotatedAt:         rotatedAt,
-		expiresAt:         expiresAt,
-		revokedAt:         revokedAt,
-		loaded:            true,
-		origUid:           uid,
-		origDeviceId:      deviceId,
-		origTokenHash:     tokenHash,
-		origPrevTokenHash: prevTokenHash,
-		origRotatedAt:     rotatedAt,
-		origExpiresAt:     expiresAt,
-		origRevokedAt:     revokedAt,
+		id:            id,
+		uid:           uid,
+		deviceId:      deviceId,
+		token:         token,
+		prevToken:     prevToken,
+		rotatedAt:     rotatedAt,
+		expiresAt:     expiresAt,
+		revokedAt:     revokedAt,
+		loaded:        true,
+		origUid:       uid,
+		origDeviceId:  deviceId,
+		origToken:     token,
+		origPrevToken: prevToken,
+		origRotatedAt: rotatedAt,
+		origExpiresAt: expiresAt,
+		origRevokedAt: revokedAt,
 	}
 }
 
@@ -106,27 +106,27 @@ func (o *UserRefreshToken) SetDeviceId(v string) {
 func (o *UserRefreshToken) DeviceId() string {
 	return o.deviceId
 }
-func (o *UserRefreshToken) SetTokenHash(v string) {
-	if o.tokenHash == v {
+func (o *UserRefreshToken) SetToken(v string) {
+	if o.token == v {
 		return
 	}
-	o.tokenHash = v
-	o.dirty |= dirtyUserRefreshTokenTokenHash
+	o.token = v
+	o.dirty |= dirtyUserRefreshTokenToken
 }
 
-func (o *UserRefreshToken) TokenHash() string {
-	return o.tokenHash
+func (o *UserRefreshToken) Token() string {
+	return o.token
 }
-func (o *UserRefreshToken) SetPrevTokenHash(v string) {
-	if o.prevTokenHash == v {
+func (o *UserRefreshToken) SetPrevToken(v string) {
+	if o.prevToken == v {
 		return
 	}
-	o.prevTokenHash = v
-	o.dirty |= dirtyUserRefreshTokenPrevTokenHash
+	o.prevToken = v
+	o.dirty |= dirtyUserRefreshTokenPrevToken
 }
 
-func (o *UserRefreshToken) PrevTokenHash() string {
-	return o.prevTokenHash
+func (o *UserRefreshToken) PrevToken() string {
+	return o.prevToken
 }
 func (o *UserRefreshToken) SetRotatedAt(v int64) {
 	if o.rotatedAt == v {
@@ -165,33 +165,45 @@ func (o *UserRefreshToken) RevokedAt() int64 {
 func (o *UserRefreshToken) ResetToLoaded() {
 	o.uid = o.origUid
 	o.deviceId = o.origDeviceId
-	o.tokenHash = o.origTokenHash
-	o.prevTokenHash = o.origPrevTokenHash
+	o.token = o.origToken
+	o.prevToken = o.origPrevToken
 	o.rotatedAt = o.origRotatedAt
 	o.expiresAt = o.origExpiresAt
 	o.revokedAt = o.origRevokedAt
 	o.dirty = 0
 }
 
-const selectColumnsUserRefreshToken = "id, uid, device_id, token_hash, prev_token_hash, rotated_at, expires_at, revoked_at"
+// TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
+// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+func (o *UserRefreshToken) TableName() string {
+	return "user_refresh_token"
+}
+
+// Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
+// 表示这个对象还没有身份。
+func (o *UserRefreshToken) Identity() int64 {
+	return o.id
+}
+
+const selectColumnsUserRefreshToken = "id, uid, device_id, token, prev_token, rotated_at, expires_at, revoked_at"
 
 func scanUserRefreshToken(s dbctx.Scanner) (*UserRefreshToken, error) {
 	var (
-		id            int64
-		uid           int64
-		deviceId      string
-		tokenHash     string
-		prevTokenHash string
-		rotatedAt     int64
-		expiresAt     int64
-		revokedAt     int64
+		id        int64
+		uid       int64
+		deviceId  string
+		token     string
+		prevToken string
+		rotatedAt int64
+		expiresAt int64
+		revokedAt int64
 	)
 	if err := s.Scan(
 		&id,
 		&uid,
 		&deviceId,
-		&tokenHash,
-		&prevTokenHash,
+		&token,
+		&prevToken,
 		&rotatedAt,
 		&expiresAt,
 		&revokedAt,
@@ -202,8 +214,8 @@ func scanUserRefreshToken(s dbctx.Scanner) (*UserRefreshToken, error) {
 		id,
 		uid,
 		deviceId,
-		tokenHash,
-		prevTokenHash,
+		token,
+		prevToken,
 		rotatedAt,
 		expiresAt,
 		revokedAt,
@@ -216,7 +228,7 @@ func (o userRefreshToken) getId(
 	id int64,
 ) *UserRefreshToken {
 	const query = "SELECT " + selectColumnsUserRefreshToken +
-		" FROM user_refresh_token" +
+		" FROM \"user_refresh_token\"" +
 		" WHERE id = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, id)
 }
@@ -249,7 +261,7 @@ func (o userRefreshToken) getUidDeviceId(
 	uid int64, deviceId string,
 ) *UserRefreshToken {
 	const query = "SELECT " + selectColumnsUserRefreshToken +
-		" FROM user_refresh_token" +
+		" FROM \"user_refresh_token\"" +
 		" WHERE uid = $1 AND device_id = $2"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, uid, deviceId)
 }
@@ -276,36 +288,36 @@ func (o userRefreshToken) SelectByUidDeviceId(
 	)
 }
 
-func (o userRefreshToken) getTokenHash(
+func (o userRefreshToken) getToken(
 	ctx context.Context,
 	q dbctx.Querier,
-	tokenHash string,
+	token string,
 ) *UserRefreshToken {
 	const query = "SELECT " + selectColumnsUserRefreshToken +
-		" FROM user_refresh_token" +
-		" WHERE token_hash = $1"
-	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, tokenHash)
+		" FROM \"user_refresh_token\"" +
+		" WHERE token = $1"
+	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, token)
 }
 
-func (o userRefreshToken) GetByTokenHash(
+func (o userRefreshToken) GetByToken(
 	ctx context.Context,
-	tokenHash string,
+	token string,
 ) *UserRefreshToken {
-	return o.getTokenHash(
+	return o.getToken(
 		ctx,
 		dbctx.TxFromCtx(ctx),
-		tokenHash,
+		token,
 	)
 }
 
-func (o userRefreshToken) SelectByTokenHash(
+func (o userRefreshToken) SelectByToken(
 	ctx context.Context,
-	tokenHash string,
+	token string,
 ) *UserRefreshToken {
-	return o.getTokenHash(
+	return o.getToken(
 		ctx,
 		dbctx.QuerierFromCtx(ctx),
-		tokenHash,
+		token,
 	)
 }
 
@@ -314,7 +326,7 @@ func (o userRefreshToken) getAll(
 	q dbctx.Querier,
 ) []*UserRefreshToken {
 	const query = "SELECT " + selectColumnsUserRefreshToken +
-		" FROM user_refresh_token"
+		" FROM \"user_refresh_token\""
 	return dbctx.QueryList(ctx, q, query, scanUserRefreshToken)
 }
 
@@ -342,7 +354,7 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 	}
 	var sb strings.Builder
 	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE user_refresh_token SET ")
+	sb.WriteString("UPDATE \"user_refresh_token\" SET ")
 	if v.dirty&dirtyUserRefreshTokenUid != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
@@ -359,20 +371,20 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 		sb.WriteString("device_id = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
-	if v.dirty&dirtyUserRefreshTokenTokenHash != 0 {
+	if v.dirty&dirtyUserRefreshTokenToken != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
 		}
-		args = append(args, v.tokenHash)
-		sb.WriteString("token_hash = $")
+		args = append(args, v.token)
+		sb.WriteString("token = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
-	if v.dirty&dirtyUserRefreshTokenPrevTokenHash != 0 {
+	if v.dirty&dirtyUserRefreshTokenPrevToken != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
 		}
-		args = append(args, v.prevTokenHash)
-		sb.WriteString("prev_token_hash = $")
+		args = append(args, v.prevToken)
+		sb.WriteString("prev_token = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserRefreshTokenRotatedAt != 0 {
@@ -413,8 +425,8 @@ func (v *UserRefreshToken) FlushDone(rows int64) error {
 	}
 	v.origUid = v.uid
 	v.origDeviceId = v.deviceId
-	v.origTokenHash = v.tokenHash
-	v.origPrevTokenHash = v.prevTokenHash
+	v.origToken = v.token
+	v.origPrevToken = v.prevToken
 	v.origRotatedAt = v.rotatedAt
 	v.origExpiresAt = v.expiresAt
 	v.origRevokedAt = v.revokedAt
@@ -444,8 +456,8 @@ func (o userRefreshToken) Insert(
 	v *UserRefreshToken,
 ) {
 	tx := dbctx.TxFromCtx(ctx)
-	const query = "INSERT INTO user_refresh_token " +
-		"(uid, device_id, token_hash, prev_token_hash, rotated_at, expires_at, revoked_at) " +
+	const query = "INSERT INTO \"user_refresh_token\" " +
+		"(uid, device_id, token, prev_token, rotated_at, expires_at, revoked_at) " +
 		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
 		" RETURNING id"
 
@@ -454,8 +466,8 @@ func (o userRefreshToken) Insert(
 		query,
 		v.uid,
 		v.deviceId,
-		v.tokenHash,
-		v.prevTokenHash,
+		v.token,
+		v.prevToken,
 		v.rotatedAt,
 		v.expiresAt,
 		v.revokedAt,
@@ -472,9 +484,9 @@ func (o userRefreshToken) Insert(
 
 	v.origDeviceId = v.deviceId
 
-	v.origTokenHash = v.tokenHash
+	v.origToken = v.token
 
-	v.origPrevTokenHash = v.prevTokenHash
+	v.origPrevToken = v.prevToken
 
 	v.origRotatedAt = v.rotatedAt
 

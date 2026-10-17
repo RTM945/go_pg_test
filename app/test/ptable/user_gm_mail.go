@@ -173,6 +173,18 @@ func (o *GMMail) ResetToLoaded() {
 	o.dirty = 0
 }
 
+// TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
+// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+func (o *GMMail) TableName() string {
+	return "user_gm_mail"
+}
+
+// Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
+// 表示这个对象还没有身份。
+func (o *GMMail) Identity() int64 {
+	return o.id
+}
+
 const selectColumnsGMMail = "id, params, award_list, start_at, end_at, channel, user_created_at, condition"
 
 func scanGMMail(s dbctx.Scanner) (*GMMail, error) {
@@ -216,7 +228,7 @@ func (o gMMail) getId(
 	id int64,
 ) *GMMail {
 	const query = "SELECT " + selectColumnsGMMail +
-		" FROM user_gm_mail" +
+		" FROM \"user_gm_mail\"" +
 		" WHERE id = $1"
 	return dbctx.QueryOne(ctx, q, query, scanGMMail, id)
 }
@@ -248,7 +260,7 @@ func (o gMMail) getAll(
 	q dbctx.Querier,
 ) []*GMMail {
 	const query = "SELECT " + selectColumnsGMMail +
-		" FROM user_gm_mail"
+		" FROM \"user_gm_mail\""
 	return dbctx.QueryList(ctx, q, query, scanGMMail)
 }
 
@@ -276,7 +288,7 @@ func (v *GMMail) FlushStmt() (string, []any) {
 	}
 	var sb strings.Builder
 	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE user_gm_mail SET ")
+	sb.WriteString("UPDATE \"user_gm_mail\" SET ")
 	if v.dirty&dirtyGMMailParams != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
@@ -378,7 +390,7 @@ func (o gMMail) Insert(
 	v *GMMail,
 ) {
 	tx := dbctx.TxFromCtx(ctx)
-	const query = "INSERT INTO user_gm_mail " +
+	const query = "INSERT INTO \"user_gm_mail\" " +
 		"(params, award_list, start_at, end_at, channel, user_created_at, condition) " +
 		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
 		" RETURNING id"

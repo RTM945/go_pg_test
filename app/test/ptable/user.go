@@ -35,7 +35,7 @@ type User struct {
 	lastLoginAt       int64
 	totalCharge       int64
 	firstChargeAt     int64
-	request_token     string
+	requestToken      string
 	loaded            bool
 	origName          string
 	origStatus        int16
@@ -59,7 +59,7 @@ func loadedUser(
 	lastLoginAt int64,
 	totalCharge int64,
 	firstChargeAt int64,
-	request_token string,
+	requestToken string,
 ) *User {
 	return &User{
 		id:                id,
@@ -69,7 +69,7 @@ func loadedUser(
 		lastLoginAt:       lastLoginAt,
 		totalCharge:       totalCharge,
 		firstChargeAt:     firstChargeAt,
-		request_token:     request_token,
+		requestToken:      requestToken,
 		loaded:            true,
 		origName:          name,
 		origStatus:        status,
@@ -77,7 +77,7 @@ func loadedUser(
 		origLastLoginAt:   lastLoginAt,
 		origTotalCharge:   totalCharge,
 		origFirstChargeAt: firstChargeAt,
-		origRequestToken:  request_token,
+		origRequestToken:  requestToken,
 	}
 }
 
@@ -151,15 +151,15 @@ func (o *User) FirstChargeAt() int64 {
 	return o.firstChargeAt
 }
 func (o *User) SetRequestToken(v string) {
-	if o.request_token == v {
+	if o.requestToken == v {
 		return
 	}
-	o.request_token = v
+	o.requestToken = v
 	o.dirty |= dirtyUserRequestToken
 }
 
 func (o *User) RequestToken() string {
-	return o.request_token
+	return o.requestToken
 }
 
 func (o *User) ResetToLoaded() {
@@ -169,8 +169,20 @@ func (o *User) ResetToLoaded() {
 	o.lastLoginAt = o.origLastLoginAt
 	o.totalCharge = o.origTotalCharge
 	o.firstChargeAt = o.origFirstChargeAt
-	o.request_token = o.origRequestToken
+	o.requestToken = o.origRequestToken
 	o.dirty = 0
+}
+
+// TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
+// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+func (o *User) TableName() string {
+	return "user"
+}
+
+// Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
+// 表示这个对象还没有身份。
+func (o *User) Identity() int64 {
+	return o.id
 }
 
 const selectColumnsUser = "id, name, status, created_at, last_login_at, total_charge, first_charge_at, request_token"
@@ -184,7 +196,7 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		lastLoginAt   int64
 		totalCharge   int64
 		firstChargeAt int64
-		request_token string
+		requestToken  string
 	)
 	if err := s.Scan(
 		&id,
@@ -194,7 +206,7 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		&lastLoginAt,
 		&totalCharge,
 		&firstChargeAt,
-		&request_token,
+		&requestToken,
 	); err != nil {
 		return nil, err
 	}
@@ -206,7 +218,7 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		lastLoginAt,
 		totalCharge,
 		firstChargeAt,
-		request_token,
+		requestToken,
 	), nil
 }
 
@@ -216,7 +228,7 @@ func (o user) getId(
 	id int64,
 ) *User {
 	const query = "SELECT " + selectColumnsUser +
-		" FROM user" +
+		" FROM \"user\"" +
 		" WHERE id = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUser, id)
 }
@@ -248,7 +260,7 @@ func (o user) getAll(
 	q dbctx.Querier,
 ) []*User {
 	const query = "SELECT " + selectColumnsUser +
-		" FROM user"
+		" FROM \"user\""
 	return dbctx.QueryList(ctx, q, query, scanUser)
 }
 
@@ -276,7 +288,7 @@ func (v *User) FlushStmt() (string, []any) {
 	}
 	var sb strings.Builder
 	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE user SET ")
+	sb.WriteString("UPDATE \"user\" SET ")
 	if v.dirty&dirtyUserName != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
@@ -329,7 +341,7 @@ func (v *User) FlushStmt() (string, []any) {
 		if len(args) > 0 {
 			sb.WriteString(", ")
 		}
-		args = append(args, v.request_token)
+		args = append(args, v.requestToken)
 		sb.WriteString("request_token = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
@@ -351,7 +363,7 @@ func (v *User) FlushDone(rows int64) error {
 	v.origLastLoginAt = v.lastLoginAt
 	v.origTotalCharge = v.totalCharge
 	v.origFirstChargeAt = v.firstChargeAt
-	v.origRequestToken = v.request_token
+	v.origRequestToken = v.requestToken
 	v.dirty = 0
 	return nil
 }
@@ -378,7 +390,7 @@ func (o user) Insert(
 	v *User,
 ) {
 	tx := dbctx.TxFromCtx(ctx)
-	const query = "INSERT INTO user " +
+	const query = "INSERT INTO \"user\" " +
 		"(name, status, created_at, last_login_at, total_charge, first_charge_at, request_token) " +
 		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
 		" RETURNING id"
@@ -392,7 +404,7 @@ func (o user) Insert(
 		v.lastLoginAt,
 		v.totalCharge,
 		v.firstChargeAt,
-		v.request_token,
+		v.requestToken,
 	)
 	if err := row.Scan(
 		&v.id,
@@ -414,7 +426,7 @@ func (o user) Insert(
 
 	v.origFirstChargeAt = v.firstChargeAt
 
-	v.origRequestToken = v.request_token
+	v.origRequestToken = v.requestToken
 
 	v.dirty = 0
 	dbctx.Track(ctx, v)

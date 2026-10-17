@@ -6,12 +6,11 @@ package main
 import (
 	"go_pg_test/app/test/logic/red_envelope"
 	"go_pg_test/app/test/msg"
-	"go_pg_test/common/server"
 
 	testpb "go_pg_test/genpb/test"
 )
 
 func init() {
-	processRegistry.Register(testpb.PROTOCOL_TYPE_CRedEnvelope, msg.NewCRedEnvelope, red_envelope.ProcessCRedEnvelope, server.ProcessUserTryLock)
-	processRegistry.Register(testpb.PROTOCOL_TYPE_CRedEnvelopeClick, msg.NewCRedEnvelopeClick, red_envelope.ProcessCRedEnvelopeClick, server.ProcessUserTryLock)
+	register(processRegistry, testpb.PROTOCOL_TYPE_CRedEnvelope, msg.NewCRedEnvelope, red_envelope.ProcessCRedEnvelope, processUserTryLock)
+	register(processRegistry, testpb.PROTOCOL_TYPE_CRedEnvelopeClick, msg.NewCRedEnvelopeClick, red_envelope.ProcessCRedEnvelopeClick, processUserTryLock)
 }

@@ -27,8 +27,7 @@ type Login struct {
 	Plat          string                 `protobuf:"bytes,1,opt,name=plat,proto3" json:"plat,omitempty"`
 	Account       string                 `protobuf:"bytes,2,opt,name=account,proto3" json:"account,omitempty"`
 	Ext           map[int32]string       `protobuf:"bytes,3,rep,name=ext,proto3" json:"ext,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	LoginServerId int32                  `protobuf:"varint,4,opt,name=loginServerId,proto3" json:"loginServerId,omitempty"`
-	ClientVersion string                 `protobuf:"bytes,5,opt,name=clientVersion,proto3" json:"clientVersion,omitempty"`
+	ClientVersion string                 `protobuf:"bytes,4,opt,name=clientVersion,proto3" json:"clientVersion,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -84,16 +83,71 @@ func (x *Login) GetExt() map[int32]string {
 	return nil
 }
 
-func (x *Login) GetLoginServerId() int32 {
+func (x *Login) GetClientVersion() string {
 	if x != nil {
-		return x.LoginServerId
+		return x.ClientVersion
+	}
+	return ""
+}
+
+type LoginResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Uid   int64                  `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Name  string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// 轮换后的免登录凭证；loginToken 和 requestToken 走响应头：
+	//   X-Login-Token / X-Request-Token
+	RefreshToken  string `protobuf:"bytes,3,opt,name=refreshToken,proto3" json:"refreshToken,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LoginResult) Reset() {
+	*x = LoginResult{}
+	mi := &file_test_login_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LoginResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LoginResult) ProtoMessage() {}
+
+func (x *LoginResult) ProtoReflect() protoreflect.Message {
+	mi := &file_test_login_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LoginResult.ProtoReflect.Descriptor instead.
+func (*LoginResult) Descriptor() ([]byte, []int) {
+	return file_test_login_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *LoginResult) GetUid() int64 {
+	if x != nil {
+		return x.Uid
 	}
 	return 0
 }
 
-func (x *Login) GetClientVersion() string {
+func (x *LoginResult) GetName() string {
 	if x != nil {
-		return x.ClientVersion
+		return x.Name
+	}
+	return ""
+}
+
+func (x *LoginResult) GetRefreshToken() string {
+	if x != nil {
+		return x.RefreshToken
 	}
 	return ""
 }
@@ -102,16 +156,19 @@ var File_test_login_proto protoreflect.FileDescriptor
 
 const file_test_login_proto_rawDesc = "" +
 	"\n" +
-	"\x10test/login.proto\x1a\text.proto\"\xe2\x01\n" +
+	"\x10test/login.proto\x1a\text.proto\"\xbc\x01\n" +
 	"\x05Login\x12\x12\n" +
 	"\x04plat\x18\x01 \x01(\tR\x04plat\x12\x18\n" +
 	"\aaccount\x18\x02 \x01(\tR\aaccount\x12!\n" +
 	"\x03ext\x18\x03 \x03(\v2\x0f.Login.ExtEntryR\x03ext\x12$\n" +
-	"\rloginServerId\x18\x04 \x01(\x05R\rloginServerId\x12$\n" +
-	"\rclientVersion\x18\x05 \x01(\tR\rclientVersion\x1a6\n" +
+	"\rclientVersion\x18\x04 \x01(\tR\rclientVersion\x1a6\n" +
 	"\bExtEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x05R\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x04\x90\x82\x19eB\x1eZ\x1cgo_pg_test/genpb/test;testpbb\x06proto3"
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x04\x90\x82\x19e\"]\n" +
+	"\vLoginResult\x12\x10\n" +
+	"\x03uid\x18\x01 \x01(\x03R\x03uid\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\"\n" +
+	"\frefreshToken\x18\x03 \x01(\tR\frefreshToken:\x04\x90\x82\x19fB\x1eZ\x1cgo_pg_test/genpb/test;testpbb\x06proto3"
 
 var (
 	file_test_login_proto_rawDescOnce sync.Once
@@ -125,13 +182,14 @@ func file_test_login_proto_rawDescGZIP() []byte {
 	return file_test_login_proto_rawDescData
 }
 
-var file_test_login_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_test_login_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_test_login_proto_goTypes = []any{
-	(*Login)(nil), // 0: Login
-	nil,           // 1: Login.ExtEntry
+	(*Login)(nil),       // 0: Login
+	(*LoginResult)(nil), // 1: LoginResult
+	nil,                 // 2: Login.ExtEntry
 }
 var file_test_login_proto_depIdxs = []int32{
-	1, // 0: Login.ext:type_name -> Login.ExtEntry
+	2, // 0: Login.ext:type_name -> Login.ExtEntry
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -150,7 +208,7 @@ func file_test_login_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_test_login_proto_rawDesc), len(file_test_login_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

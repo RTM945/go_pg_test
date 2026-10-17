@@ -12,8 +12,15 @@ message Login {
   string plat = 1;
   string account = 2;
   map<int32, string> ext = 3;
-  int32 loginServerId = 4;
-  string clientVersion = 5;
+  string clientVersion = 4;
 }
 
+message LoginResult {
+  option (proto.type_id) = 102;
 
+  int64 uid = 1;
+  string name = 2;
+  // 轮换后的免登录凭证；loginToken 和 requestToken 走响应头：
+  //   X-Login-Token / X-Request-Token
+  string refreshToken = 3;
+}

@@ -137,6 +137,18 @@ func (o *RedEnvelope) ResetToLoaded() {
 	o.dirty = 0
 }
 
+// TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
+// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+func (o *RedEnvelope) TableName() string {
+	return "user_red_envelope"
+}
+
+// Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
+// 表示这个对象还没有身份。
+func (o *RedEnvelope) Identity() int64 {
+	return o.id
+}
+
 const selectColumnsRedEnvelope = "id, uid, act_id, last_refresh_at, today_count, total"
 
 func scanRedEnvelope(s dbctx.Scanner) (*RedEnvelope, error) {
@@ -174,7 +186,7 @@ func (o redEnvelope) getId(
 	id int64,
 ) *RedEnvelope {
 	const query = "SELECT " + selectColumnsRedEnvelope +
-		" FROM user_red_envelope" +
+		" FROM \"user_red_envelope\"" +
 		" WHERE id = $1"
 	return dbctx.QueryOne(ctx, q, query, scanRedEnvelope, id)
 }
@@ -207,7 +219,7 @@ func (o redEnvelope) getUidActId(
 	uid int64, actId int32,
 ) *RedEnvelope {
 	const query = "SELECT " + selectColumnsRedEnvelope +
-		" FROM user_red_envelope" +
+		" FROM \"user_red_envelope\"" +
 		" WHERE uid = $1 AND act_id = $2"
 	return dbctx.QueryOne(ctx, q, query, scanRedEnvelope, uid, actId)
 }
@@ -239,7 +251,7 @@ func (o redEnvelope) getAll(
 	q dbctx.Querier,
 ) []*RedEnvelope {
 	const query = "SELECT " + selectColumnsRedEnvelope +
-		" FROM user_red_envelope"
+		" FROM \"user_red_envelope\""
 	return dbctx.QueryList(ctx, q, query, scanRedEnvelope)
 }
 
@@ -267,7 +279,7 @@ func (v *RedEnvelope) FlushStmt() (string, []any) {
 	}
 	var sb strings.Builder
 	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE user_red_envelope SET ")
+	sb.WriteString("UPDATE \"user_red_envelope\" SET ")
 	if v.dirty&dirtyRedEnvelopeUid != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
@@ -351,7 +363,7 @@ func (o redEnvelope) Insert(
 	v *RedEnvelope,
 ) {
 	tx := dbctx.TxFromCtx(ctx)
-	const query = "INSERT INTO user_red_envelope " +
+	const query = "INSERT INTO \"user_red_envelope\" " +
 		"(uid, act_id, last_refresh_at, today_count, total) " +
 		"VALUES ($1, $2, $3, $4, $5)" +
 		" RETURNING id"

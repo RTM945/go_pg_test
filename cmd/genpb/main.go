@@ -21,8 +21,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
-
-	_ "go_pg_test/genpb/common"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 func main() {
@@ -40,17 +39,20 @@ func main() {
 		log.Fatal("modulePath:", err)
 	}
 
-	// 清理必须排在 protoc 前面，否则会把自己刚产出的文件删掉
-	if err := cleanGenerated(repoRoot); err != nil {
-		log.Fatal("cleanGenerated:", err)
-	}
-
+	// protoc 的产物（genpb/**/*.pb.go、desc.pb）由 protoc 自己写、自己覆盖，
+	// 失败时它不会删旧文件，genpb 不碰它们。
+	// genpb 只负责自己模板产出的部分（app/msg、注册表、protocol_types.go）：
+	// 这些先留在内存里，等所有生成步骤都成功了再统一落盘，
+	// 生成失败时仓库里的旧代码原封不动。
 	// go_pg_test/proto，所有 proto 共用的 -I 根
 	protoRoot := filepath.Join(repoRoot, "proto")
-	// 生成物落到 repoRoot 下，落哪个子目录由每个 proto 的 go_package 决定
+	// protoc 的产物直接落到仓库，落哪个子目录由每个 proto 的 go_package 决定
 	// （protoc 的 paths=import + module= 会自己剥掉 module 前缀）
 	outRoot := repoRoot
 	desc := filepath.Join(repoRoot, "genpb", "desc.pb")
+	if err := os.MkdirAll(filepath.Dir(desc), 0o755); err != nil {
+		log.Fatal("create genpb dir:", err)
+	}
 	// protoc include
 	protocInclude := filepath.Join(repoRoot, "third_party", "protoc", "include")
 	// vt include
@@ -187,42 +189,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fds := &descriptorpb.FileDescriptorSet{}
-	if err := proto.Unmarshal(descb, fds); err != nil {
-		log.Fatal(err)
-	}
-	files, err := protodesc.NewFiles(fds)
+	files, typeIDExtType, err := loadDescriptors(descb)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	var typeIDExtType protoreflect.ExtensionType
-	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
-		exts := fd.Extensions()
-		for i := 0; i < exts.Len(); i++ {
-			ext := exts.Get(i)
-			if string(ext.Name()) == "type_id" {
-				typeIDExtType, err = protoregistry.GlobalTypes.FindExtensionByName(ext.FullName())
-				if err != nil {
-					log.Fatal(err)
-				}
-				return false
-			}
-		}
-		return true
-	})
-	if typeIDExtType == nil {
-		log.Fatal("proto.type_id extension not found; check that proto/ext.proto exists and has been generated")
+		log.Fatal("loadDescriptors:", err)
 	}
 
 	groups, err := collectTypeIds(files, typeIDExtType)
 	if err != nil {
 		log.Fatal("collectTypeIds:", err)
 	}
+	// 模板产物先收进内存，此时仓库里 genpb 自己那部分一个字节都还没动。
+	var outputs []generatedFile
 	for _, g := range groups {
-		if err := writeProtocolTypes(repoRoot, module, g); err != nil {
-			log.Fatal("writeProtocolTypes:", err)
+		f, err := renderProtocolTypes(repoRoot, module, g)
+		if err != nil {
+			log.Fatal("renderProtocolTypes:", err)
 		}
+		outputs = append(outputs, f)
 	}
 
 	// app 侧：msg 包装类、logic 脚手架、注册表
@@ -230,36 +213,65 @@ func main() {
 	if err != nil {
 		log.Fatal("collectAppProtoFiles:", err)
 	}
-	if err := genAppCode(repoRoot, module, protos); err != nil {
+	appFiles, err := genAppCode(repoRoot, module, protos)
+	if err != nil {
 		log.Fatal("genAppCode:", err)
+	}
+	outputs = append(outputs, appFiles...)
+
+	// 到这里生成全部成功，才删旧模板产物、写新文件。protoc 的产物不参与。
+	if err := publishGenerated(repoRoot, outputs); err != nil {
+		log.Fatal("publishGenerated:", err)
 	}
 
 	fmt.Printf("protoc succeeded. generated files under %s\n", filepath.Join(repoRoot, "genpb"))
 }
 
-// cleanGenerated 把上次生成的东西全删掉，重头再来。
+// generatedFile 一份已经生成好、等着发布进仓库的文件。
+type generatedFile struct {
+	path string
+	data []byte
+}
+
+// publishGenerated 在所有生成步骤都成功之后才动仓库：先删 genpb 自己的旧产物，
+// 再把内存里的新内容写进去。走到这里已经不会再有 proto/模板错误，
+// 剩下的只是磁盘 IO。
 //
-// 按路径删，不解析文件内容——删哪些是写死的一张单子，改动这里就是改动契约：
+// 对比旧做法（先删再生成）：proto 写错时旧文件原封不动，
+// 不会出现“旧的已删、新的没生成”、整个仓库编不过的连坐状态。
+func publishGenerated(repoRoot string, files []generatedFile) error {
+	if err := cleanGenerated(repoRoot); err != nil {
+		return err
+	}
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(f.path, f.data, 0o644); err != nil {
+			return err
+		}
+	}
+	log.Printf("wrote %d generated files", len(files))
+	return nil
+}
+
+// cleanGenerated 删掉 genpb 自己生成的那部分，给新产物腾位置。
 //
-//	genpb/                            整个目录，protoc 和 genpb 的产物都在这
+// 只碰非 protoc 产物：
+//
 //	app/<app>/msg/                    协议包装类
 //	app/<app>/processor_registry.gen.go
 //
 // 刻意不碰的：
 //
+//	genpb/                            里面的 *.pb.go、*_vtproto.pb.go、desc.pb
+//	                                  是 protoc 的产物，由 protoc 自己覆盖；
+//	                                  genpb 删它们只会让生成失败时整个仓库编不过
 //	app/<app>/logic/                  msg_*.go 里是人写的业务逻辑
 //	app/<app>/ptable/                 pdbgen 的产出，不是我们的地盘
 //
-// 必须先于 protoc 执行，否则会删掉刚产出的东西。
-//
-// 代价是 protoc 失败时 genpb/ 是空的——重跑一次就好，文件都在版本库里。
+// 只在 publishGenerated 里、所有生成都成功之后调用。
 func cleanGenerated(repoRoot string) error {
-	genpbDir := filepath.Join(repoRoot, "genpb")
-	if err := os.RemoveAll(genpbDir); err != nil {
-		return err
-	}
-	log.Printf("cleared %s", genpbDir)
-
 	apps, err := os.ReadDir(filepath.Join(repoRoot, "app"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -294,14 +306,14 @@ package {{.GoPackage}}
 const PROTOCOL_TYPE_{{.Name}} int32 = {{.TypeId}}
 {{end}}`
 
-// writeProtocolTypes 把一个 go_package 下的协议号常量写进它自己的包。
+// renderProtocolTypes 把一个 go_package 下的协议号常量渲染进内存。
 // 每个 app 一份，互不污染——app 编译时不会链到别人的协议号。
-func writeProtocolTypes(repoRoot, module string, g *typeIdGroup) error {
+func renderProtocolTypes(repoRoot, module string, g *typeIdGroup) (generatedFile, error) {
 	rel, ok := strings.CutPrefix(g.GoImportPath, module+"/")
 	if !ok {
-		return fmt.Errorf("go_package %q is not under module %s", g.GoImportPath, module)
+		return generatedFile{}, fmt.Errorf("go_package %q is not under module %s", g.GoImportPath, module)
 	}
-	return writeGenerated(filepath.Join(repoRoot, filepath.FromSlash(rel), "protocol_types.go"), protocolTypesTmpl, g)
+	return renderFile(filepath.Join(repoRoot, filepath.FromSlash(rel), "protocol_types.go"), protocolTypesTmpl, g)
 }
 
 // modulePath 从 go.mod 里读出 module 名，别在代码里硬编码。
@@ -378,6 +390,70 @@ type typeIdGroup struct {
 	TypeIds      []*msg2typeId
 }
 
+// loadDescriptors 从 desc.pb 解析文件描述符和 (proto.type_id) 扩展类型。
+//
+// 这里刻意不 import go_pg_test/genpb/common：那是生成物，生成器一旦依赖它，
+// genpb 缺失时生成器自己就编不过，想重跑都没机会（先有鸡还是先有蛋）。
+// ext.proto 已经通过 --include_imports 进了 desc.pb，扩展类型可以从描述符
+// 动态构造，不需要生成的 Go 代码。
+func loadDescriptors(raw []byte) (*protoregistry.Files, protoreflect.ExtensionType, error) {
+	// 第一遍：还不知道扩展类型，type_id 会被当成 unknown fields 留下，
+	// 但文件/消息/扩展的声明都在，足够把扩展描述符找出来。
+	fds := &descriptorpb.FileDescriptorSet{}
+	if err := proto.Unmarshal(raw, fds); err != nil {
+		return nil, nil, err
+	}
+	files, err := protodesc.NewFiles(fds)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var extDesc protoreflect.ExtensionDescriptor
+	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		exts := fd.Extensions()
+		for i := 0; i < exts.Len(); i++ {
+			ext := exts.Get(i)
+			if string(ext.Name()) == "type_id" {
+				extDesc = ext
+				return false
+			}
+		}
+		return true
+	})
+	if extDesc == nil {
+		return nil, nil, errors.New("proto.type_id extension not found; check that proto/ext.proto exists")
+	}
+	if extDesc.Kind() != protoreflect.Int32Kind {
+		return nil, nil, fmt.Errorf("proto.type_id must be int32, got %v", extDesc.Kind())
+	}
+
+	// 第二遍：用动态扩展类型当 resolver 重新解析，options 里的 type_id 才会
+	// 被真正解出来，而不是留在 unknown fields 里。
+	xt := dynamicpb.NewExtensionType(extDesc)
+	types := new(protoregistry.Types)
+	if err := types.RegisterExtension(xt); err != nil {
+		return nil, nil, err
+	}
+	fds = &descriptorpb.FileDescriptorSet{}
+	if err := (proto.UnmarshalOptions{Resolver: types}).Unmarshal(raw, fds); err != nil {
+		return nil, nil, err
+	}
+	files, err = protodesc.NewFiles(fds)
+	if err != nil {
+		return nil, nil, err
+	}
+	return files, xt, nil
+}
+
+// hasTypeId 判断 message options 上有没有打 (proto.type_id)。
+//
+// 不用 proto.HasExtension：动态扩展的描述符来自 desc.pb，和生成的
+// MessageOptions 描述符不是同一个实例，proto.HasExtension 会因实例不等而
+// 误报 false。reflect 的 Has 只比较全名，两种来源都能用。
+func hasTypeId(opts protoreflect.ProtoMessage, extType protoreflect.ExtensionType) bool {
+	return opts.ProtoReflect().Has(extType.TypeDescriptor())
+}
+
 // collectTypeIds 收集所有打了 (proto.type_id) 的 message，按 typeId 升序返回。
 //
 // type_id 撞车和 message 重名都是致命的，这里直接报错而不是放过去：
@@ -401,7 +477,7 @@ func collectTypeIds(files *protoregistry.Files, typeIDExtType protoreflect.Exten
 		for i := 0; i < messages.Len(); i++ {
 			msg := messages.Get(i)
 			opts := msg.Options()
-			if opts == nil || !proto.HasExtension(opts, typeIDExtType) {
+			if opts == nil || !hasTypeId(opts, typeIDExtType) {
 				continue
 			}
 

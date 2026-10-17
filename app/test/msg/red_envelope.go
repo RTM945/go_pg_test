@@ -14,7 +14,7 @@ import (
 type CRedEnvelope struct {
 	*testpb.CRedEnvelope
 
-	session *io.Session
+	session io.Session
 	typeId  int32
 }
 
@@ -25,11 +25,11 @@ func NewCRedEnvelope() *CRedEnvelope {
 	}
 }
 
-func (m *CRedEnvelope) SetSession(session *io.Session) {
+func (m *CRedEnvelope) SetSession(session io.Session) {
 	m.session = session
 }
 
-func (m *CRedEnvelope) Session() *io.Session {
+func (m *CRedEnvelope) Session() io.Session {
 	return m.session
 }
 
@@ -54,7 +54,7 @@ func (m *CRedEnvelope) Write(buffer []byte) (int, error) {
 type SRedEnvelope struct {
 	*testpb.SRedEnvelope
 
-	session *io.Session
+	session io.Session
 	typeId  int32
 }
 
@@ -65,11 +65,11 @@ func NewSRedEnvelope() *SRedEnvelope {
 	}
 }
 
-func (m *SRedEnvelope) SetSession(session *io.Session) {
+func (m *SRedEnvelope) SetSession(session io.Session) {
 	m.session = session
 }
 
-func (m *SRedEnvelope) Session() *io.Session {
+func (m *SRedEnvelope) Session() io.Session {
 	return m.session
 }
 
@@ -94,7 +94,7 @@ func (m *SRedEnvelope) Write(buffer []byte) (int, error) {
 type CRedEnvelopeClick struct {
 	*testpb.CRedEnvelopeClick
 
-	session *io.Session
+	session io.Session
 	typeId  int32
 }
 
@@ -105,11 +105,11 @@ func NewCRedEnvelopeClick() *CRedEnvelopeClick {
 	}
 }
 
-func (m *CRedEnvelopeClick) SetSession(session *io.Session) {
+func (m *CRedEnvelopeClick) SetSession(session io.Session) {
 	m.session = session
 }
 
-func (m *CRedEnvelopeClick) Session() *io.Session {
+func (m *CRedEnvelopeClick) Session() io.Session {
 	return m.session
 }
 

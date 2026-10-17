@@ -14,7 +14,7 @@ import (
 type Login struct {
 	*testpb.Login
 
-	session *io.Session
+	session io.Session
 	typeId  int32
 }
 
@@ -25,11 +25,11 @@ func NewLogin() *Login {
 	}
 }
 
-func (m *Login) SetSession(session *io.Session) {
+func (m *Login) SetSession(session io.Session) {
 	m.session = session
 }
 
-func (m *Login) Session() *io.Session {
+func (m *Login) Session() io.Session {
 	return m.session
 }
 
@@ -47,4 +47,44 @@ func (m *Login) Read(buffer []byte) error {
 
 func (m *Login) Write(buffer []byte) (int, error) {
 	return m.Login.MarshalToVT(buffer)
+}
+
+// LoginResult 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
+// 不用为每个协议再写一遍字段访问器。
+type LoginResult struct {
+	*testpb.LoginResult
+
+	session io.Session
+	typeId  int32
+}
+
+func NewLoginResult() *LoginResult {
+	return &LoginResult{
+		LoginResult: &testpb.LoginResult{},
+		typeId:      testpb.PROTOCOL_TYPE_LoginResult,
+	}
+}
+
+func (m *LoginResult) SetSession(session io.Session) {
+	m.session = session
+}
+
+func (m *LoginResult) Session() io.Session {
+	return m.session
+}
+
+func (m *LoginResult) TypeId() int32 {
+	return m.typeId
+}
+
+func (m *LoginResult) Size() int {
+	return m.LoginResult.SizeVT()
+}
+
+func (m *LoginResult) Read(buffer []byte) error {
+	return m.LoginResult.UnmarshalVT(buffer)
+}
+
+func (m *LoginResult) Write(buffer []byte) (int, error) {
+	return m.LoginResult.MarshalToVT(buffer)
 }

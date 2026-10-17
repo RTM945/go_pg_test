@@ -119,6 +119,18 @@ func (o *UserIdentity) ResetToLoaded() {
 	o.dirty = 0
 }
 
+// TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
+// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+func (o *UserIdentity) TableName() string {
+	return "user_identity"
+}
+
+// Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
+// 表示这个对象还没有身份。
+func (o *UserIdentity) Identity() int64 {
+	return o.id
+}
+
 const selectColumnsUserIdentity = "id, platform, platform_uid, uid, created_at"
 
 func scanUserIdentity(s dbctx.Scanner) (*UserIdentity, error) {
@@ -153,7 +165,7 @@ func (o userIdentity) getId(
 	id int64,
 ) *UserIdentity {
 	const query = "SELECT " + selectColumnsUserIdentity +
-		" FROM user_identity" +
+		" FROM \"user_identity\"" +
 		" WHERE id = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserIdentity, id)
 }
@@ -186,7 +198,7 @@ func (o userIdentity) listUid(
 	uid int64,
 ) []*UserIdentity {
 	const query = "SELECT " + selectColumnsUserIdentity +
-		" FROM user_identity" +
+		" FROM \"user_identity\"" +
 		" WHERE uid = $1"
 	return dbctx.QueryList(ctx, q, query, scanUserIdentity, uid)
 }
@@ -219,7 +231,7 @@ func (o userIdentity) getPlatformPlatformUID(
 	platform int16, platformUID string,
 ) *UserIdentity {
 	const query = "SELECT " + selectColumnsUserIdentity +
-		" FROM user_identity" +
+		" FROM \"user_identity\"" +
 		" WHERE platform = $1 AND platform_uid = $2"
 	return dbctx.QueryOne(ctx, q, query, scanUserIdentity, platform, platformUID)
 }
@@ -251,7 +263,7 @@ func (o userIdentity) getAll(
 	q dbctx.Querier,
 ) []*UserIdentity {
 	const query = "SELECT " + selectColumnsUserIdentity +
-		" FROM user_identity"
+		" FROM \"user_identity\""
 	return dbctx.QueryList(ctx, q, query, scanUserIdentity)
 }
 
@@ -279,7 +291,7 @@ func (v *UserIdentity) FlushStmt() (string, []any) {
 	}
 	var sb strings.Builder
 	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE user_identity SET ")
+	sb.WriteString("UPDATE \"user_identity\" SET ")
 	if v.dirty&dirtyUserIdentityPlatform != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
@@ -354,7 +366,7 @@ func (o userIdentity) Insert(
 	v *UserIdentity,
 ) {
 	tx := dbctx.TxFromCtx(ctx)
-	const query = "INSERT INTO user_identity " +
+	const query = "INSERT INTO \"user_identity\" " +
 		"(platform, platform_uid, uid, created_at) " +
 		"VALUES ($1, $2, $3, $4)" +
 		" RETURNING id"

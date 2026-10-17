@@ -52,13 +52,11 @@ func newLogger() (*slog.Logger, func() error, error) {
 // newMux 单独拆出来是为了能直接测路由：只有 POST 会进 handler，
 // 浏览器拿 GET 去摸 /favicon.ico 在 mux 这一层就被挡掉，
 // 不用在 handler 里自己判 r.URL.Path。
-func newMux(reg *server.ProcessorRegistry, log *slog.Logger) *http.ServeMux {
+func newMux(log *slog.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /", server.Handler(reg, log))
+	mux.HandleFunc("POST /", handler(log))
 	return mux
 }
-
-var processRegistry = server.NewProcessorRegistry()
 
 func main() {
 	flag.Parse()
@@ -97,7 +95,7 @@ func main() {
 
 	log.Info("listening", "app", schema.AppName, "addr", *addr, "schema", *schemaPath, "showSQL", schema.ShowSQL)
 	// 阻塞
-	serveErr := server.Serve(ctx, &http.Server{Addr: *addr, Handler: newMux(processRegistry, log)}, shutdownTimeout, log)
+	serveErr := server.Serve(ctx, &http.Server{Addr: *addr, Handler: newMux(log)}, shutdownTimeout, log)
 
 	dbpool.Close()
 

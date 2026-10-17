@@ -48,7 +48,7 @@ func (e *RedEnvelope) refresh() {
 	//}
 }
 
-func (e *RedEnvelope) Online(session *io.Session) error {
+func (e *RedEnvelope) Online(session io.Session) error {
 	session.Logger().Info("online", "uid", e.Uid(), "actId", e.ActId(), "todayCount", e.TodayCount(), "total", e.Total())
 
 	resp := msg.NewSRedEnvelope()
@@ -59,7 +59,7 @@ func (e *RedEnvelope) Online(session *io.Session) error {
 	return session.Write(resp)
 }
 
-func (e *RedEnvelope) Click(session *io.Session) error {
+func (e *RedEnvelope) Click(session io.Session) error {
 	session.Logger().Info("click", "uid", e.Uid(), "actId", e.ActId(), "todayCount", e.TodayCount(), "total", e.Total())
 	e.SetTodayCount(e.TodayCount() + 1)
 	e.SetTotal(e.Total() + 1)
