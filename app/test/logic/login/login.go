@@ -104,7 +104,9 @@ func sdkLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID 
 
 	refreshToken := token.New32()
 	refreshExp := time.Now().Add(refreshTTL)
-	uid, created, name, requestToken, err := findOrCreateAccount(ctx, platform, platUID, deviceID, refreshToken, refreshExp)
+	requestToken := token.New32()
+
+	uid, created, name, err := findOrCreateAccount(ctx, platform, platUID, deviceID, refreshToken, refreshExp, requestToken)
 	if err != nil {
 		return err
 	}
@@ -121,8 +123,7 @@ func sdkLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID 
 				return ErrAccountBanned
 			}
 			name = user.Name()
-			requestToken = token.New32()
-			user.SetRequestToken(requestToken)
+			upsertRequestToken(ctx, uid, requestToken)
 			upsertRefreshToken(ctx, uid, deviceID, refreshToken, refreshExp)
 			return nil
 		})
@@ -190,7 +191,7 @@ func autoLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID
 
 		// 登录即新会话：requestToken 链从头开始
 		requestToken = token.New32()
-		user.SetRequestToken(requestToken)
+		upsertRequestToken(ctx, uid, requestToken)
 
 		// 轮换：当前 token 挪到 prev（keepPrev 时 prev 保持不变）
 		if !keepPrev {
@@ -232,7 +233,11 @@ func findUIDByIdentity(ctx context.Context, platform int16, platUID string) (uid
 	return uid, err
 }
 
-func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID, refreshToken string, refreshExp time.Time) (uid int64, created bool, name, requestToken string, err error) {
+func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID, refreshToken string, refreshExp time.Time, requestToken string) (int64, bool, string, error) {
+	var err error
+	var created bool
+	var uid int64
+	var name string
 	// 1. 先无锁查，绝大多数登录在这里就结束
 	err = dbpool.Query(ctx, func(ctx context.Context) error {
 		if ident := ptable.UserIdentityTable.SelectByPlatformPlatformUID(ctx, platform, platUID); ident != nil {
@@ -241,7 +246,7 @@ func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID,
 		return nil
 	})
 	if err != nil || uid != 0 {
-		return uid, false, "", "", err
+		return uid, false, "", err
 	}
 
 	// 2. 没查到：按身份加 named lock，事务内再查一次，再建
@@ -254,8 +259,6 @@ func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID,
 
 		now := time.Now().Unix()
 		user := ptable.NewUser()
-		requestToken = token.New32()
-		user.SetRequestToken(requestToken)
 		user.SetCreatedAt(now)
 		ptable.UserTable.Insert(ctx, user)
 		newUID := user.Id()
@@ -272,12 +275,12 @@ func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID,
 
 		// 免登录行也要在这个事务里建，否则首次登录后没法免登录
 		insertRefreshToken(ctx, newUID, deviceID, refreshToken, refreshExp)
-
+		insertRequestToken(ctx, newUID, requestToken)
 		uid, created = newUID, true
 		name = user.Name()
 		return nil
 	})
-	return uid, created, name, requestToken, err
+	return uid, created, name, err
 }
 
 func checkClientVersion(v string) error {
@@ -303,11 +306,30 @@ func insertRefreshToken(ctx context.Context, uid int64, deviceID string, refresh
 func upsertRefreshToken(ctx context.Context, uid int64, deviceID string, refreshToken string, exp time.Time) {
 	row := ptable.UserRefreshTokenTable.GetByUidDeviceId(ctx, uid, deviceID)
 	if row == nil {
-		row = insertRefreshToken(ctx, uid, deviceID, refreshToken, exp)
+		// 刚插入的行所有字段都已经是新值了，再 set 一遍只会多一条同数据 UPDATE。
+		insertRefreshToken(ctx, uid, deviceID, refreshToken, exp)
+		return
 	}
 	row.SetToken(refreshToken)
 	row.SetPrevToken("") // 必须清，否则作废前的旧 token 在宽限期内还能用
 	row.SetRotatedAt(time.Now().Unix())
 	row.SetExpiresAt(exp.Unix())
 	row.SetRevokedAt(0)
+}
+
+func insertRequestToken(ctx context.Context, uid int64, requestToken string) *ptable.UserRequestToken {
+	row := ptable.NewUserRequestToken()
+	row.SetUid(uid)
+	row.SetToken(requestToken)
+	ptable.UserRequestTokenTable.Insert(ctx, row)
+	return row
+}
+
+func upsertRequestToken(ctx context.Context, uid int64, requestToken string) {
+	row := ptable.UserRequestTokenTable.GetByUid(ctx, uid)
+	if row == nil {
+		insertRequestToken(ctx, uid, requestToken)
+		return
+	}
+	row.SetToken(requestToken)
 }

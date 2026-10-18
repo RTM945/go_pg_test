@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"go_pg_test/app/test/ptable"
 	"go_pg_test/common/db"
 	"go_pg_test/common/server"
 	"go_pg_test/common/token"
 	"go_pg_test/io"
-	"pdbgen/dbctx"
 	"pdbgen/dbpool"
 )
 
@@ -83,15 +83,8 @@ func runUserProcess(ctx context.Context, s io.Session, process func(context.Cont
 		return fmt.Errorf("unexpected session type %T", s)
 	}
 
-	var tokenOK bool
-	err := dbctx.TxFromCtx(ctx).QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM "user" WHERE id = $1 AND request_token = $2)`,
-		s.UID(), appSession.reqToken,
-	).Scan(&tokenOK)
-	if err != nil {
-		return err
-	}
-	if !tokenOK {
+	userRequestToken := ptable.UserRequestTokenTable.GetByUid(ctx, s.UID())
+	if userRequestToken == nil || userRequestToken.Token() != appSession.reqToken {
 		return server.ErrStaleRequestToken
 	}
 
@@ -99,19 +92,10 @@ func runUserProcess(ctx context.Context, s io.Session, process func(context.Cont
 		return err
 	}
 
-	next := token.New32()
-	tag, err := dbctx.TxFromCtx(ctx).Exec(ctx,
-		`UPDATE "user" SET request_token = $2 WHERE id = $1`,
-		s.UID(), next,
-	)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return server.ErrStaleRequestToken
-	}
+	newToken := token.New32()
+	userRequestToken.SetToken(newToken)
 
 	// 事务还没提交，但 header 只是内存里的 map；提交失败时 handler 会把它删掉。
-	s.Writer().Header().Set(hdrReqToken, next)
+	s.Writer().Header().Set(hdrReqToken, newToken)
 	return nil
 }

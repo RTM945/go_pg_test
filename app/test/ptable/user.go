@@ -24,7 +24,6 @@ const (
 	dirtyUserLastLoginAt   uint64 = 1 << 3
 	dirtyUserTotalCharge   uint64 = 1 << 4
 	dirtyUserFirstChargeAt uint64 = 1 << 5
-	dirtyUserRequestToken  uint64 = 1 << 6
 )
 
 type User struct {
@@ -35,7 +34,6 @@ type User struct {
 	lastLoginAt       int64
 	totalCharge       int64
 	firstChargeAt     int64
-	requestToken      string
 	loaded            bool
 	origName          string
 	origStatus        int16
@@ -43,7 +41,6 @@ type User struct {
 	origLastLoginAt   int64
 	origTotalCharge   int64
 	origFirstChargeAt int64
-	origRequestToken  string
 	dirty             uint64
 }
 
@@ -59,7 +56,6 @@ func loadedUser(
 	lastLoginAt int64,
 	totalCharge int64,
 	firstChargeAt int64,
-	requestToken string,
 ) *User {
 	return &User{
 		id:                id,
@@ -69,7 +65,6 @@ func loadedUser(
 		lastLoginAt:       lastLoginAt,
 		totalCharge:       totalCharge,
 		firstChargeAt:     firstChargeAt,
-		requestToken:      requestToken,
 		loaded:            true,
 		origName:          name,
 		origStatus:        status,
@@ -77,7 +72,6 @@ func loadedUser(
 		origLastLoginAt:   lastLoginAt,
 		origTotalCharge:   totalCharge,
 		origFirstChargeAt: firstChargeAt,
-		origRequestToken:  requestToken,
 	}
 }
 
@@ -150,17 +144,6 @@ func (o *User) SetFirstChargeAt(v int64) {
 func (o *User) FirstChargeAt() int64 {
 	return o.firstChargeAt
 }
-func (o *User) SetRequestToken(v string) {
-	if o.requestToken == v {
-		return
-	}
-	o.requestToken = v
-	o.dirty |= dirtyUserRequestToken
-}
-
-func (o *User) RequestToken() string {
-	return o.requestToken
-}
 
 func (o *User) ResetToLoaded() {
 	o.name = o.origName
@@ -169,7 +152,6 @@ func (o *User) ResetToLoaded() {
 	o.lastLoginAt = o.origLastLoginAt
 	o.totalCharge = o.origTotalCharge
 	o.firstChargeAt = o.origFirstChargeAt
-	o.requestToken = o.origRequestToken
 	o.dirty = 0
 }
 
@@ -185,7 +167,7 @@ func (o *User) Identity() int64 {
 	return o.id
 }
 
-const selectColumnsUser = "id, name, status, created_at, last_login_at, total_charge, first_charge_at, request_token"
+const selectColumnsUser = "id, name, status, created_at, last_login_at, total_charge, first_charge_at"
 
 func scanUser(s dbctx.Scanner) (*User, error) {
 	var (
@@ -196,7 +178,6 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		lastLoginAt   int64
 		totalCharge   int64
 		firstChargeAt int64
-		requestToken  string
 	)
 	if err := s.Scan(
 		&id,
@@ -206,7 +187,6 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		&lastLoginAt,
 		&totalCharge,
 		&firstChargeAt,
-		&requestToken,
 	); err != nil {
 		return nil, err
 	}
@@ -218,7 +198,6 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		lastLoginAt,
 		totalCharge,
 		firstChargeAt,
-		requestToken,
 	), nil
 }
 
@@ -337,14 +316,6 @@ func (v *User) FlushStmt() (string, []any) {
 		sb.WriteString("first_charge_at = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
-	if v.dirty&dirtyUserRequestToken != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.requestToken)
-		sb.WriteString("request_token = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
 	args = append(args, v.id)
 	sb.WriteString(" WHERE id = $")
 	sb.WriteString(strconv.Itoa(len(args)))
@@ -363,7 +334,6 @@ func (v *User) FlushDone(rows int64) error {
 	v.origLastLoginAt = v.lastLoginAt
 	v.origTotalCharge = v.totalCharge
 	v.origFirstChargeAt = v.firstChargeAt
-	v.origRequestToken = v.requestToken
 	v.dirty = 0
 	return nil
 }
@@ -391,8 +361,8 @@ func (o user) Insert(
 ) {
 	tx := dbctx.TxFromCtx(ctx)
 	const query = "INSERT INTO \"user\" " +
-		"(name, status, created_at, last_login_at, total_charge, first_charge_at, request_token) " +
-		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
+		"(name, status, created_at, last_login_at, total_charge, first_charge_at) " +
+		"VALUES ($1, $2, $3, $4, $5, $6)" +
 		" RETURNING id"
 
 	row := tx.QueryRow(
@@ -404,7 +374,6 @@ func (o user) Insert(
 		v.lastLoginAt,
 		v.totalCharge,
 		v.firstChargeAt,
-		v.requestToken,
 	)
 	if err := row.Scan(
 		&v.id,
@@ -425,8 +394,6 @@ func (o user) Insert(
 	v.origTotalCharge = v.totalCharge
 
 	v.origFirstChargeAt = v.firstChargeAt
-
-	v.origRequestToken = v.requestToken
 
 	v.dirty = 0
 	dbctx.Track(ctx, v)
