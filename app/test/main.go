@@ -4,9 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"go_pg_test/common/httpserver"
 	"go_pg_test/common/logging"
 	"go_pg_test/common/redis"
-	"go_pg_test/common/server"
 	"log/slog"
 	"net/http"
 	"os"
@@ -95,7 +95,7 @@ func main() {
 
 	log.Info("listening", "app", schema.AppName, "addr", *addr, "schema", *schemaPath, "showSQL", schema.ShowSQL)
 	// 阻塞
-	serveErr := server.Serve(ctx, &http.Server{Addr: *addr, Handler: newMux(log)}, shutdownTimeout, log)
+	serveErr := httpserver.Serve(ctx, &http.Server{Addr: *addr, Handler: newMux(log)}, shutdownTimeout, log)
 
 	dbpool.Close()
 

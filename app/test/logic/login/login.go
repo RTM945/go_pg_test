@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"go_pg_test/app/test/msg"
 	"go_pg_test/app/test/ptable"
+	appsession "go_pg_test/app/test/session"
 	"go_pg_test/common/db"
+	"go_pg_test/common/dispatch"
 	"go_pg_test/common/redis"
-	"go_pg_test/common/server"
 	"go_pg_test/common/token"
 	"go_pg_test/io"
 	"pdbgen/dbpool"
@@ -16,9 +17,6 @@ import (
 )
 
 const (
-	hdrLoginToken = "X-Login-Token"
-	hdrReqToken   = "X-Request-Token"
-
 	extToken     int32 = 1
 	extChannel   int32 = 2
 	extPackageID int32 = 3
@@ -40,8 +38,7 @@ var (
 )
 
 // loginOutcome 登录成功后要下发的所有东西。
-// loginToken / requestToken 通过 Session 交给 Handler 写响应头，
-// refreshToken 放进 LoginResult 响应体。
+// loginToken / requestToken 写到业务 session，refreshToken 放进 LoginResult。
 type loginOutcome struct {
 	uid          int64
 	name         string
@@ -50,16 +47,19 @@ type loginOutcome struct {
 	requestToken string
 }
 
-func (o loginOutcome) write(session io.Session) error {
-	// 登录成功 = 事务都已提交，这时候写响应头最安全。
-	session.Writer().Header().Set(hdrLoginToken, o.loginToken)
-	session.Writer().Header().Set(hdrReqToken, o.requestToken)
+func (o loginOutcome) write(s io.Session) error {
+	appSession, ok := s.(*appsession.Session)
+	if !ok {
+		return fmt.Errorf("login: session %T cannot carry tokens", s)
+	}
+	appSession.SetNextLoginToken(o.loginToken)
+	appSession.SetNextReqToken(o.requestToken)
 
 	resp := msg.NewLoginResult()
 	resp.Uid = o.uid
 	resp.Name = o.name
 	resp.RefreshToken = o.refreshToken
-	return session.Write(resp)
+	return s.Write(resp)
 }
 
 // 三个 token：
@@ -75,14 +75,14 @@ func ProcessLogin(ctx context.Context, req *msg.Login) error {
 	// 用于自动登录的token
 	refreshToken := req.Ext[extToken]
 	if req.Plat == "" || req.Account == "" || deviceID == "" {
-		return fmt.Errorf("%w: bad login params", server.ErrMalformedPayload)
+		return fmt.Errorf("%w: bad login params", dispatch.ErrMalformedPayload)
 	}
 	if err := checkClientVersion(req.ClientVersion); err != nil {
 		return err
 	}
 	v, ok := verifiers[req.Plat]
 	if !ok {
-		return fmt.Errorf("%w: unsupported plat %q", server.ErrMalformedPayload, req.Plat)
+		return fmt.Errorf("%w: unsupported plat %q", dispatch.ErrMalformedPayload, req.Plat)
 	}
 	// TODO: 按 IP / account 限流
 

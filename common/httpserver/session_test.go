@@ -1,10 +1,13 @@
-package server
+package httpserver
 
 import (
 	"bytes"
+	"log/slog"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"go_pg_test/common/logging"
 	"go_pg_test/io"
 )
 
@@ -19,6 +22,7 @@ type fakeMsg struct {
 func (m *fakeMsg) SetSession(s io.Session)     { m.session = s }
 func (m *fakeMsg) Session() io.Session         { return m.session }
 func (m *fakeMsg) TypeId() int32               { return m.typeId }
+func (m *fakeMsg) String() string              { return "fake" }
 func (m *fakeMsg) Size() int                   { return max(m.size, len(m.payload)) }
 func (m *fakeMsg) Read(b []byte) error         { m.payload = append(m.payload[:0], b...); return nil }
 func (m *fakeMsg) Write(b []byte) (int, error) { return copy(b, m.payload), nil }
@@ -114,18 +118,52 @@ func TestSessionFlushNothingIsNoop(t *testing.T) {
 
 // Size() 和实际编出来的长度对不上时必须拦住：放过去的话写出去的是个坏帧，
 // 客户端解不出来还查不到原因。
-func TestSessionWriteSizeMismatch(t *testing.T) {
+// 编码推迟到 Flush，所以 Write 成功、Flush 报错，且一个字节都不能发出去。
+func TestSessionFlushSizeMismatch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s := NewSession(rec, nil)
 
-	err := s.Write(&fakeMsg{typeId: 123, payload: []byte{1, 2, 3}, size: 10})
-	if err == nil {
-		t.Fatal("Write() = nil, want error")
+	if err := s.Write(&fakeMsg{typeId: 123, payload: []byte{1, 2, 3}, size: 10}); err != nil {
+		t.Fatalf("Write() error = %v", err)
 	}
-	if s.PendingFrames() != 0 {
-		t.Errorf("报错了却攒下了 %d 帧", s.PendingFrames())
+	if got := s.PendingFrames(); got != 1 {
+		t.Fatalf("PendingFrames() = %d, want 1", got)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("Flush 之前就写出了 %d 字节", rec.Body.Len())
+	}
+
+	if err := s.Flush(); err == nil {
+		t.Fatal("Flush() = nil, want error")
 	}
 	if rec.Body.Len() != 0 {
 		t.Errorf("报错了却写出了 %d 字节", rec.Body.Len())
+	}
+}
+
+// 多帧下发时按 []string 展开，和 sql batch 一样带换行，方便看实际发了哪些协议。
+func TestSessionFlushLogsBatch(t *testing.T) {
+	rec := httptest.NewRecorder()
+	var logBuf bytes.Buffer
+	logger := slog.New(logging.NewHandler(&logBuf, slog.LevelDebug))
+	s := NewSession(rec, logger)
+
+	if err := s.Write(&fakeMsg{typeId: 123, payload: []byte{0x01, 0x02}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(&fakeMsg{typeId: 124, payload: []byte{0x03}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	out := logBuf.String()
+	if !strings.Contains(out, `msg="send batch"`) {
+		t.Errorf("缺少 send batch 日志:\n%s", out)
+	}
+	want := "\n\ttypeId=123 msg=fake\n\ttypeId=124 msg=fake\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("batch 日志没有按行展开，want:\n%q\ngot:\n%s", want, out)
 	}
 }

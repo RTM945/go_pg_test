@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"strings"
 
+	appsession "go_pg_test/app/test/session"
+	"go_pg_test/common/dispatch"
+	"go_pg_test/common/httpserver"
 	"go_pg_test/common/redis"
-	"go_pg_test/common/server"
 	"go_pg_test/io"
 	"pdbgen/dbpool"
 )
@@ -35,7 +37,7 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 // 读帧 → 验 loginToken → dispatch（内含事务和 requestToken 链）→ Flush。
 func handler(log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		s := &session{Session: server.NewSession(w, log)}
+		s := appsession.New(httpserver.NewSession(w, log), r.Header.Get(hdrReqToken))
 
 		typeId, payload, err := io.ReadFrame(r.Body)
 		if err != nil {
@@ -66,21 +68,15 @@ func handler(log *slog.Logger) http.HandlerFunc {
 			}
 		}
 
-		s.reqToken = r.Header.Get(hdrReqToken)
-
 		if err := processRegistry.Dispatch(r.Context(), typeId, payload, s); err != nil {
-			// 事务可能回滚了，业务在事务里写进 header 的新 token 不能发出去。
-			w.Header().Del(hdrLoginToken)
-			w.Header().Del(hdrReqToken)
-
 			switch {
 			// 协议号不认识、协议体解不出，都是客户端发错了
-			case errors.Is(err, server.ErrUnknownTypeId), errors.Is(err, server.ErrMalformedPayload):
+			case errors.Is(err, dispatch.ErrUnknownTypeId), errors.Is(err, dispatch.ErrMalformedPayload):
 				log.Warn("Wrong typeId", "typeId", typeId, "remote", r.RemoteAddr, "err", err)
 				http.Error(w, err.Error(), http.StatusBadRequest)
 			// 客户端手里的 requestToken 过期了：上一次成功响应可能丢了。
 			// 客户端应静默走免登录换一套新 token，而不是拿旧 token 重试。
-			case errors.Is(err, server.ErrStaleRequestToken):
+			case errors.Is(err, ErrStaleRequestToken):
 				writeErr(w, http.StatusUnauthorized, "REQ_TOKEN_STALE", "request token is stale")
 			// 同一个 uid 的上一次请求还占着咨询锁。这不是服务端的错，
 			// 语义是"你上一次还没做完，稍后重试"——回 500 的话客户端会当成 bug。
@@ -95,7 +91,14 @@ func handler(log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		// Dispatch 返回意味着事务已经提交，现在才把业务攒下的响应发出去。
+		// Dispatch 返回意味着事务已经提交，现在才发 token 和业务响应。
+		if v := s.NextLoginToken(); v != "" {
+			w.Header().Set(hdrLoginToken, v)
+		}
+		if v := s.NextReqToken(); v != "" {
+			w.Header().Set(hdrReqToken, v)
+		}
+
 		frames := s.PendingFrames()
 		if err := s.Flush(); err != nil {
 			// 响应多半已经写出去了，状态码改不了，只能记一笔
