@@ -38,6 +38,20 @@ type UserIdentity struct {
 	dirty           uint64
 }
 
+type userIdentityState struct {
+	id              int64
+	platform        int16
+	platformUID     string
+	uid             int64
+	createdAt       int64
+	loaded          bool
+	origPlatform    int16
+	origPlatformUID string
+	origUid         int64
+	origCreatedAt   int64
+	dirty           uint64
+}
+
 func NewUserIdentity() *UserIdentity {
 	return &UserIdentity{}
 }
@@ -119,8 +133,47 @@ func (o *UserIdentity) ResetToLoaded() {
 	o.dirty = 0
 }
 
+func (v *UserIdentity) SnapshotState() dbctx.RecordState {
+	return userIdentityState{
+		id:              v.id,
+		platform:        v.platform,
+		platformUID:     v.platformUID,
+		uid:             v.uid,
+		createdAt:       v.createdAt,
+		loaded:          v.loaded,
+		origPlatform:    v.origPlatform,
+		origPlatformUID: v.origPlatformUID,
+		origUid:         v.origUid,
+		origCreatedAt:   v.origCreatedAt,
+		dirty:           v.dirty,
+	}
+}
+
+func (v *UserIdentity) RestoreState(state dbctx.RecordState) {
+	s := state.(userIdentityState)
+	v.id = s.id
+	v.platform = s.platform
+	v.platformUID = s.platformUID
+	v.uid = s.uid
+	v.createdAt = s.createdAt
+	v.loaded = s.loaded
+	v.origPlatform = s.origPlatform
+	v.origPlatformUID = s.origPlatformUID
+	v.origUid = s.origUid
+	v.origCreatedAt = s.origCreatedAt
+	v.dirty = s.dirty
+}
+
+// ResetNew 把 Insert 回滚后的对象恢复成"未加载"状态。
+func (v *UserIdentity) ResetNew() {
+	v.id = 0
+	v.loaded = false
+	v.dirty = 0
+}
+
 // TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
-// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+// Transaction 用它们把同一行解析到同一个缓存记录
+// （xdb: getCachedTRecord / addCachedTRecord）。
 func (o *UserIdentity) TableName() string {
 	return "user_identity"
 }
@@ -174,9 +227,12 @@ func (o userIdentity) GetById(
 	ctx context.Context,
 	id int64,
 ) *UserIdentity {
+	if v, ok := dbctx.GetCachedRecordAs[*UserIdentity](ctx, "user_identity", id); ok {
+		return v
+	}
 	return o.getId(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		id,
 	)
 }
@@ -209,7 +265,7 @@ func (o userIdentity) ListByUid(
 ) []*UserIdentity {
 	return o.listUid(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		uid,
 	)
 }
@@ -242,7 +298,7 @@ func (o userIdentity) GetByPlatformPlatformUID(
 ) *UserIdentity {
 	return o.getPlatformPlatformUID(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		platform, platformUID,
 	)
 }
@@ -270,7 +326,7 @@ func (o userIdentity) getAll(
 func (o userIdentity) GetAll(
 	ctx context.Context,
 ) []*UserIdentity {
-	return o.getAll(ctx, dbctx.TxFromCtx(ctx))
+	return o.getAll(ctx, dbctx.SQLTxFromCtx(ctx))
 }
 
 func (o userIdentity) SelectAll(
@@ -284,7 +340,7 @@ var ErrUserIdentityNotFound = errors.New(
 )
 
 // FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// UnitOfWork 据此跳过这一行，不占用一次往返。
+// Transaction 据此跳过这一行，不占用一次往返。
 func (v *UserIdentity) FlushStmt() (string, []any) {
 	if !v.loaded || v.dirty == 0 {
 		return "", nil
@@ -344,7 +400,7 @@ func (v *UserIdentity) FlushDone(rows int64) error {
 	return nil
 }
 
-// Update 是不经过 UnitOfWork 的直接落库入口，
+// Update 是不经过 Transaction 的直接落库入口，
 // 生成代码内部不再调用它，仅供业务代码需要立即写库时使用。
 func (o userIdentity) Update(
 	ctx context.Context,
@@ -354,7 +410,7 @@ func (o userIdentity) Update(
 	if query == "" {
 		return nil
 	}
-	tag, err := dbctx.TxFromCtx(ctx).Exec(ctx, query, args...)
+	tag, err := dbctx.SQLTxFromCtx(ctx).Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("user_identity update: %w", err)
 	}
@@ -365,7 +421,8 @@ func (o userIdentity) Insert(
 	ctx context.Context,
 	v *UserIdentity,
 ) {
-	tx := dbctx.TxFromCtx(ctx)
+	dbctx.RegisterNew(ctx, v)
+	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user_identity\" " +
 		"(platform, platform_uid, uid, created_at) " +
 		"VALUES ($1, $2, $3, $4)" +
@@ -396,5 +453,5 @@ func (o userIdentity) Insert(
 	v.origCreatedAt = v.createdAt
 
 	v.dirty = 0
-	dbctx.Track(ctx, v)
+	dbctx.GetOrAddCachedRecord(ctx, v)
 }

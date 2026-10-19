@@ -82,8 +82,8 @@ func register[T io.Msg](
 // runUserProcess 在用户事务内维护 requestToken 单次链：
 // 比对 → 业务 → 换新 token 并写响应头。
 //
-// 用独立的 user_request_token 表而不是 ptable.User：业务代码很可能也会
-// GetById 同一个 uid，UnitOfWork 发现同一事务里同一行有两个对象会 panic。
+// 用独立的 user_request_token 表而不是 ptable.User：requestToken 的生命周期
+// 和用户资料不同，单独一行更清晰。事务身份表现在会保证同一行复用一个对象。
 func runUserProcess(ctx context.Context, s io.Session, process func(context.Context) error) error {
 	appSession, ok := s.(*appsession.Session)
 	if !ok {

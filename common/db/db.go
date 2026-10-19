@@ -7,11 +7,15 @@ import (
 )
 
 func WithUserTryLock(ctx context.Context, uid int64, fn func(context.Context) error) error {
-	return dbpool.WithTryAdvisoryLock(ctx, uid, fn)
+	return dbpool.Procedure(ctx, dbpool.ProcedureOptions{
+		Lock: dbpool.TryAdvisoryLock(uid),
+	}, fn)
 }
 
 func WithUserLock(ctx context.Context, uid int64, fn func(context.Context) error) error {
-	return dbpool.WithAdvisoryLock(ctx, uid, fn)
+	return dbpool.Procedure(ctx, dbpool.ProcedureOptions{
+		Lock: dbpool.AdvisoryLock(uid),
+	}, fn)
 }
 
 func HashLockNS(name string) int32 {
@@ -21,9 +25,13 @@ func HashLockNS(name string) int32 {
 }
 
 func WithNamedLock(ctx context.Context, lockKey string, lockValue int32, fn func(context.Context) error) error {
-	return dbpool.WithAdvisoryLock2(ctx, HashLockNS(lockKey), lockValue, fn)
+	return dbpool.Procedure(ctx, dbpool.ProcedureOptions{
+		Lock: dbpool.AdvisoryLock2(HashLockNS(lockKey), lockValue),
+	}, fn)
 }
 
 func WithNamedTryLock(ctx context.Context, lockKey string, lockValue int32, fn func(context.Context) error) error {
-	return dbpool.WithTryAdvisoryLock2(ctx, HashLockNS(lockKey), lockValue, fn)
+	return dbpool.Procedure(ctx, dbpool.ProcedureOptions{
+		Lock: dbpool.TryAdvisoryLock2(HashLockNS(lockKey), lockValue),
+	}, fn)
 }

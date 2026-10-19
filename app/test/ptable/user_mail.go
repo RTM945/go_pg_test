@@ -44,6 +44,24 @@ type Mail struct {
 	dirty         uint64
 }
 
+type mailState struct {
+	id            int64
+	uid           int64
+	confId        int32
+	state         int32
+	receiveAt     int64
+	params        string
+	awardList     string
+	loaded        bool
+	origUid       int64
+	origConfId    int32
+	origState     int32
+	origReceiveAt int64
+	origParams    string
+	origAwardList string
+	dirty         uint64
+}
+
 func NewMail() *Mail {
 	return &Mail{}
 }
@@ -155,8 +173,55 @@ func (o *Mail) ResetToLoaded() {
 	o.dirty = 0
 }
 
+func (v *Mail) SnapshotState() dbctx.RecordState {
+	return mailState{
+		id:            v.id,
+		uid:           v.uid,
+		confId:        v.confId,
+		state:         v.state,
+		receiveAt:     v.receiveAt,
+		params:        v.params,
+		awardList:     v.awardList,
+		loaded:        v.loaded,
+		origUid:       v.origUid,
+		origConfId:    v.origConfId,
+		origState:     v.origState,
+		origReceiveAt: v.origReceiveAt,
+		origParams:    v.origParams,
+		origAwardList: v.origAwardList,
+		dirty:         v.dirty,
+	}
+}
+
+func (v *Mail) RestoreState(state dbctx.RecordState) {
+	s := state.(mailState)
+	v.id = s.id
+	v.uid = s.uid
+	v.confId = s.confId
+	v.state = s.state
+	v.receiveAt = s.receiveAt
+	v.params = s.params
+	v.awardList = s.awardList
+	v.loaded = s.loaded
+	v.origUid = s.origUid
+	v.origConfId = s.origConfId
+	v.origState = s.origState
+	v.origReceiveAt = s.origReceiveAt
+	v.origParams = s.origParams
+	v.origAwardList = s.origAwardList
+	v.dirty = s.dirty
+}
+
+// ResetNew 把 Insert 回滚后的对象恢复成"未加载"状态。
+func (v *Mail) ResetNew() {
+	v.id = 0
+	v.loaded = false
+	v.dirty = 0
+}
+
 // TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
-// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+// Transaction 用它们把同一行解析到同一个缓存记录
+// （xdb: getCachedTRecord / addCachedTRecord）。
 func (o *Mail) TableName() string {
 	return "user_mail"
 }
@@ -216,9 +281,12 @@ func (o mail) GetById(
 	ctx context.Context,
 	id int64,
 ) *Mail {
+	if v, ok := dbctx.GetCachedRecordAs[*Mail](ctx, "user_mail", id); ok {
+		return v
+	}
 	return o.getId(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		id,
 	)
 }
@@ -251,7 +319,7 @@ func (o mail) ListByUidConfId(
 ) []*Mail {
 	return o.listUidConfId(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		uid, confId,
 	)
 }
@@ -279,7 +347,7 @@ func (o mail) getAll(
 func (o mail) GetAll(
 	ctx context.Context,
 ) []*Mail {
-	return o.getAll(ctx, dbctx.TxFromCtx(ctx))
+	return o.getAll(ctx, dbctx.SQLTxFromCtx(ctx))
 }
 
 func (o mail) SelectAll(
@@ -293,7 +361,7 @@ var ErrMailNotFound = errors.New(
 )
 
 // FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// UnitOfWork 据此跳过这一行，不占用一次往返。
+// Transaction 据此跳过这一行，不占用一次往返。
 func (v *Mail) FlushStmt() (string, []any) {
 	if !v.loaded || v.dirty == 0 {
 		return "", nil
@@ -371,7 +439,7 @@ func (v *Mail) FlushDone(rows int64) error {
 	return nil
 }
 
-// Update 是不经过 UnitOfWork 的直接落库入口，
+// Update 是不经过 Transaction 的直接落库入口，
 // 生成代码内部不再调用它，仅供业务代码需要立即写库时使用。
 func (o mail) Update(
 	ctx context.Context,
@@ -381,7 +449,7 @@ func (o mail) Update(
 	if query == "" {
 		return nil
 	}
-	tag, err := dbctx.TxFromCtx(ctx).Exec(ctx, query, args...)
+	tag, err := dbctx.SQLTxFromCtx(ctx).Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("user_mail update: %w", err)
 	}
@@ -392,7 +460,8 @@ func (o mail) Insert(
 	ctx context.Context,
 	v *Mail,
 ) {
-	tx := dbctx.TxFromCtx(ctx)
+	dbctx.RegisterNew(ctx, v)
+	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user_mail\" " +
 		"(uid, conf_id, state, receive_at, params, award_list) " +
 		"VALUES ($1, $2, $3, $4, $5, $6)" +
@@ -429,5 +498,5 @@ func (o mail) Insert(
 	v.origAwardList = v.awardList
 
 	v.dirty = 0
-	dbctx.Track(ctx, v)
+	dbctx.GetOrAddCachedRecord(ctx, v)
 }

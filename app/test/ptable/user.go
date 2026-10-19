@@ -44,6 +44,24 @@ type User struct {
 	dirty             uint64
 }
 
+type userState struct {
+	id                int64
+	name              string
+	status            int16
+	createdAt         int64
+	lastLoginAt       int64
+	totalCharge       int64
+	firstChargeAt     int64
+	loaded            bool
+	origName          string
+	origStatus        int16
+	origCreatedAt     int64
+	origLastLoginAt   int64
+	origTotalCharge   int64
+	origFirstChargeAt int64
+	dirty             uint64
+}
+
 func NewUser() *User {
 	return &User{}
 }
@@ -155,8 +173,55 @@ func (o *User) ResetToLoaded() {
 	o.dirty = 0
 }
 
+func (v *User) SnapshotState() dbctx.RecordState {
+	return userState{
+		id:                v.id,
+		name:              v.name,
+		status:            v.status,
+		createdAt:         v.createdAt,
+		lastLoginAt:       v.lastLoginAt,
+		totalCharge:       v.totalCharge,
+		firstChargeAt:     v.firstChargeAt,
+		loaded:            v.loaded,
+		origName:          v.origName,
+		origStatus:        v.origStatus,
+		origCreatedAt:     v.origCreatedAt,
+		origLastLoginAt:   v.origLastLoginAt,
+		origTotalCharge:   v.origTotalCharge,
+		origFirstChargeAt: v.origFirstChargeAt,
+		dirty:             v.dirty,
+	}
+}
+
+func (v *User) RestoreState(state dbctx.RecordState) {
+	s := state.(userState)
+	v.id = s.id
+	v.name = s.name
+	v.status = s.status
+	v.createdAt = s.createdAt
+	v.lastLoginAt = s.lastLoginAt
+	v.totalCharge = s.totalCharge
+	v.firstChargeAt = s.firstChargeAt
+	v.loaded = s.loaded
+	v.origName = s.origName
+	v.origStatus = s.origStatus
+	v.origCreatedAt = s.origCreatedAt
+	v.origLastLoginAt = s.origLastLoginAt
+	v.origTotalCharge = s.origTotalCharge
+	v.origFirstChargeAt = s.origFirstChargeAt
+	v.dirty = s.dirty
+}
+
+// ResetNew 把 Insert 回滚后的对象恢复成"未加载"状态。
+func (v *User) ResetNew() {
+	v.id = 0
+	v.loaded = false
+	v.dirty = 0
+}
+
 // TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
-// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+// Transaction 用它们把同一行解析到同一个缓存记录
+// （xdb: getCachedTRecord / addCachedTRecord）。
 func (o *User) TableName() string {
 	return "user"
 }
@@ -216,9 +281,12 @@ func (o user) GetById(
 	ctx context.Context,
 	id int64,
 ) *User {
+	if v, ok := dbctx.GetCachedRecordAs[*User](ctx, "user", id); ok {
+		return v
+	}
 	return o.getId(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		id,
 	)
 }
@@ -246,7 +314,7 @@ func (o user) getAll(
 func (o user) GetAll(
 	ctx context.Context,
 ) []*User {
-	return o.getAll(ctx, dbctx.TxFromCtx(ctx))
+	return o.getAll(ctx, dbctx.SQLTxFromCtx(ctx))
 }
 
 func (o user) SelectAll(
@@ -260,7 +328,7 @@ var ErrUserNotFound = errors.New(
 )
 
 // FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// UnitOfWork 据此跳过这一行，不占用一次往返。
+// Transaction 据此跳过这一行，不占用一次往返。
 func (v *User) FlushStmt() (string, []any) {
 	if !v.loaded || v.dirty == 0 {
 		return "", nil
@@ -338,7 +406,7 @@ func (v *User) FlushDone(rows int64) error {
 	return nil
 }
 
-// Update 是不经过 UnitOfWork 的直接落库入口，
+// Update 是不经过 Transaction 的直接落库入口，
 // 生成代码内部不再调用它，仅供业务代码需要立即写库时使用。
 func (o user) Update(
 	ctx context.Context,
@@ -348,7 +416,7 @@ func (o user) Update(
 	if query == "" {
 		return nil
 	}
-	tag, err := dbctx.TxFromCtx(ctx).Exec(ctx, query, args...)
+	tag, err := dbctx.SQLTxFromCtx(ctx).Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("user update: %w", err)
 	}
@@ -359,7 +427,8 @@ func (o user) Insert(
 	ctx context.Context,
 	v *User,
 ) {
-	tx := dbctx.TxFromCtx(ctx)
+	dbctx.RegisterNew(ctx, v)
+	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user\" " +
 		"(name, status, created_at, last_login_at, total_charge, first_charge_at) " +
 		"VALUES ($1, $2, $3, $4, $5, $6)" +
@@ -396,5 +465,5 @@ func (o user) Insert(
 	v.origFirstChargeAt = v.firstChargeAt
 
 	v.dirty = 0
-	dbctx.Track(ctx, v)
+	dbctx.GetOrAddCachedRecord(ctx, v)
 }

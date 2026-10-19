@@ -47,6 +47,26 @@ type UserRefreshToken struct {
 	dirty         uint64
 }
 
+type userRefreshTokenState struct {
+	id            int64
+	uid           int64
+	deviceId      string
+	token         string
+	prevToken     string
+	rotatedAt     int64
+	expiresAt     int64
+	revokedAt     int64
+	loaded        bool
+	origUid       int64
+	origDeviceId  string
+	origToken     string
+	origPrevToken string
+	origRotatedAt int64
+	origExpiresAt int64
+	origRevokedAt int64
+	dirty         uint64
+}
+
 func NewUserRefreshToken() *UserRefreshToken {
 	return &UserRefreshToken{}
 }
@@ -173,8 +193,59 @@ func (o *UserRefreshToken) ResetToLoaded() {
 	o.dirty = 0
 }
 
+func (v *UserRefreshToken) SnapshotState() dbctx.RecordState {
+	return userRefreshTokenState{
+		id:            v.id,
+		uid:           v.uid,
+		deviceId:      v.deviceId,
+		token:         v.token,
+		prevToken:     v.prevToken,
+		rotatedAt:     v.rotatedAt,
+		expiresAt:     v.expiresAt,
+		revokedAt:     v.revokedAt,
+		loaded:        v.loaded,
+		origUid:       v.origUid,
+		origDeviceId:  v.origDeviceId,
+		origToken:     v.origToken,
+		origPrevToken: v.origPrevToken,
+		origRotatedAt: v.origRotatedAt,
+		origExpiresAt: v.origExpiresAt,
+		origRevokedAt: v.origRevokedAt,
+		dirty:         v.dirty,
+	}
+}
+
+func (v *UserRefreshToken) RestoreState(state dbctx.RecordState) {
+	s := state.(userRefreshTokenState)
+	v.id = s.id
+	v.uid = s.uid
+	v.deviceId = s.deviceId
+	v.token = s.token
+	v.prevToken = s.prevToken
+	v.rotatedAt = s.rotatedAt
+	v.expiresAt = s.expiresAt
+	v.revokedAt = s.revokedAt
+	v.loaded = s.loaded
+	v.origUid = s.origUid
+	v.origDeviceId = s.origDeviceId
+	v.origToken = s.origToken
+	v.origPrevToken = s.origPrevToken
+	v.origRotatedAt = s.origRotatedAt
+	v.origExpiresAt = s.origExpiresAt
+	v.origRevokedAt = s.origRevokedAt
+	v.dirty = s.dirty
+}
+
+// ResetNew 把 Insert 回滚后的对象恢复成"未加载"状态。
+func (v *UserRefreshToken) ResetNew() {
+	v.id = 0
+	v.loaded = false
+	v.dirty = 0
+}
+
 // TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
-// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+// Transaction 用它们把同一行解析到同一个缓存记录
+// （xdb: getCachedTRecord / addCachedTRecord）。
 func (o *UserRefreshToken) TableName() string {
 	return "user_refresh_token"
 }
@@ -237,9 +308,12 @@ func (o userRefreshToken) GetById(
 	ctx context.Context,
 	id int64,
 ) *UserRefreshToken {
+	if v, ok := dbctx.GetCachedRecordAs[*UserRefreshToken](ctx, "user_refresh_token", id); ok {
+		return v
+	}
 	return o.getId(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		id,
 	)
 }
@@ -272,7 +346,7 @@ func (o userRefreshToken) GetByUidDeviceId(
 ) *UserRefreshToken {
 	return o.getUidDeviceId(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		uid, deviceId,
 	)
 }
@@ -305,7 +379,7 @@ func (o userRefreshToken) GetByToken(
 ) *UserRefreshToken {
 	return o.getToken(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		token,
 	)
 }
@@ -333,7 +407,7 @@ func (o userRefreshToken) getAll(
 func (o userRefreshToken) GetAll(
 	ctx context.Context,
 ) []*UserRefreshToken {
-	return o.getAll(ctx, dbctx.TxFromCtx(ctx))
+	return o.getAll(ctx, dbctx.SQLTxFromCtx(ctx))
 }
 
 func (o userRefreshToken) SelectAll(
@@ -347,7 +421,7 @@ var ErrUserRefreshTokenNotFound = errors.New(
 )
 
 // FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// UnitOfWork 据此跳过这一行，不占用一次往返。
+// Transaction 据此跳过这一行，不占用一次往返。
 func (v *UserRefreshToken) FlushStmt() (string, []any) {
 	if !v.loaded || v.dirty == 0 {
 		return "", nil
@@ -434,7 +508,7 @@ func (v *UserRefreshToken) FlushDone(rows int64) error {
 	return nil
 }
 
-// Update 是不经过 UnitOfWork 的直接落库入口，
+// Update 是不经过 Transaction 的直接落库入口，
 // 生成代码内部不再调用它，仅供业务代码需要立即写库时使用。
 func (o userRefreshToken) Update(
 	ctx context.Context,
@@ -444,7 +518,7 @@ func (o userRefreshToken) Update(
 	if query == "" {
 		return nil
 	}
-	tag, err := dbctx.TxFromCtx(ctx).Exec(ctx, query, args...)
+	tag, err := dbctx.SQLTxFromCtx(ctx).Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("user_refresh_token update: %w", err)
 	}
@@ -455,7 +529,8 @@ func (o userRefreshToken) Insert(
 	ctx context.Context,
 	v *UserRefreshToken,
 ) {
-	tx := dbctx.TxFromCtx(ctx)
+	dbctx.RegisterNew(ctx, v)
+	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user_refresh_token\" " +
 		"(uid, device_id, token, prev_token, rotated_at, expires_at, revoked_at) " +
 		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
@@ -495,5 +570,5 @@ func (o userRefreshToken) Insert(
 	v.origRevokedAt = v.revokedAt
 
 	v.dirty = 0
-	dbctx.Track(ctx, v)
+	dbctx.GetOrAddCachedRecord(ctx, v)
 }

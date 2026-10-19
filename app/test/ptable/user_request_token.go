@@ -32,6 +32,16 @@ type UserRequestToken struct {
 	dirty     uint64
 }
 
+type userRequestTokenState struct {
+	id        int64
+	uid       int64
+	token     string
+	loaded    bool
+	origUid   int64
+	origToken string
+	dirty     uint64
+}
+
 func NewUserRequestToken() *UserRequestToken {
 	return &UserRequestToken{}
 }
@@ -83,8 +93,39 @@ func (o *UserRequestToken) ResetToLoaded() {
 	o.dirty = 0
 }
 
+func (v *UserRequestToken) SnapshotState() dbctx.RecordState {
+	return userRequestTokenState{
+		id:        v.id,
+		uid:       v.uid,
+		token:     v.token,
+		loaded:    v.loaded,
+		origUid:   v.origUid,
+		origToken: v.origToken,
+		dirty:     v.dirty,
+	}
+}
+
+func (v *UserRequestToken) RestoreState(state dbctx.RecordState) {
+	s := state.(userRequestTokenState)
+	v.id = s.id
+	v.uid = s.uid
+	v.token = s.token
+	v.loaded = s.loaded
+	v.origUid = s.origUid
+	v.origToken = s.origToken
+	v.dirty = s.dirty
+}
+
+// ResetNew 把 Insert 回滚后的对象恢复成"未加载"状态。
+func (v *UserRequestToken) ResetNew() {
+	v.id = 0
+	v.loaded = false
+	v.dirty = 0
+}
+
 // TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
-// UnitOfWork 用它们检测同一事务里是否有两个对象指向同一行。
+// Transaction 用它们把同一行解析到同一个缓存记录
+// （xdb: getCachedTRecord / addCachedTRecord）。
 func (o *UserRequestToken) TableName() string {
 	return "user_request_token"
 }
@@ -132,9 +173,12 @@ func (o userRequestToken) GetById(
 	ctx context.Context,
 	id int64,
 ) *UserRequestToken {
+	if v, ok := dbctx.GetCachedRecordAs[*UserRequestToken](ctx, "user_request_token", id); ok {
+		return v
+	}
 	return o.getId(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		id,
 	)
 }
@@ -167,7 +211,7 @@ func (o userRequestToken) GetByUid(
 ) *UserRequestToken {
 	return o.getUid(
 		ctx,
-		dbctx.TxFromCtx(ctx),
+		dbctx.SQLTxFromCtx(ctx),
 		uid,
 	)
 }
@@ -195,7 +239,7 @@ func (o userRequestToken) getAll(
 func (o userRequestToken) GetAll(
 	ctx context.Context,
 ) []*UserRequestToken {
-	return o.getAll(ctx, dbctx.TxFromCtx(ctx))
+	return o.getAll(ctx, dbctx.SQLTxFromCtx(ctx))
 }
 
 func (o userRequestToken) SelectAll(
@@ -209,7 +253,7 @@ var ErrUserRequestTokenNotFound = errors.New(
 )
 
 // FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// UnitOfWork 据此跳过这一行，不占用一次往返。
+// Transaction 据此跳过这一行，不占用一次往返。
 func (v *UserRequestToken) FlushStmt() (string, []any) {
 	if !v.loaded || v.dirty == 0 {
 		return "", nil
@@ -251,7 +295,7 @@ func (v *UserRequestToken) FlushDone(rows int64) error {
 	return nil
 }
 
-// Update 是不经过 UnitOfWork 的直接落库入口，
+// Update 是不经过 Transaction 的直接落库入口，
 // 生成代码内部不再调用它，仅供业务代码需要立即写库时使用。
 func (o userRequestToken) Update(
 	ctx context.Context,
@@ -261,7 +305,7 @@ func (o userRequestToken) Update(
 	if query == "" {
 		return nil
 	}
-	tag, err := dbctx.TxFromCtx(ctx).Exec(ctx, query, args...)
+	tag, err := dbctx.SQLTxFromCtx(ctx).Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("user_request_token update: %w", err)
 	}
@@ -272,7 +316,8 @@ func (o userRequestToken) Insert(
 	ctx context.Context,
 	v *UserRequestToken,
 ) {
-	tx := dbctx.TxFromCtx(ctx)
+	dbctx.RegisterNew(ctx, v)
+	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user_request_token\" " +
 		"(uid, token) " +
 		"VALUES ($1, $2)" +
@@ -297,5 +342,5 @@ func (o userRequestToken) Insert(
 	v.origToken = v.token
 
 	v.dirty = 0
-	dbctx.Track(ctx, v)
+	dbctx.GetOrAddCachedRecord(ctx, v)
 }
