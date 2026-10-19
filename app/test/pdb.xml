@@ -16,21 +16,12 @@
         <variable name="status" type="int16"/> 是否封禁 0正常 1封禁
         <variable name="createdAt" type="int64"/>
         <variable name="lastLoginAt" type="int64"/>
+        <variable name="requestToken" type="string"/> 请求幂等链的当前 token，每次成功请求轮换
         <variable name="totalCharge" type="int64"/>    累计充值
         <variable name="firstChargeAt" type="int64"/>     0 = 未首充
     </bean>
     <table name="user" bean="User">
         <primaryKey variable="id" autoIncrement="true" start="1000"/>
-    </table>
-
-    <bean name="UserRequestToken"> 请求幂等链，每个用户一行，每次成功请求轮换
-        <variable name="id" type="int64"/>
-        <variable name="uid" type="int64"/>
-        <variable name="token" type="string"/>
-    </bean>
-    <table name="user_request_token" bean="UserRequestToken">
-        <primaryKey variable="id" autoIncrement="true"/>
-        <index variable="uid" unique="true"/>
     </table>
 
     <bean name="UserIdentity"> 第三方身份绑定 (sdk登录用)

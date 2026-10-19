@@ -82,16 +82,16 @@ func register[T io.Msg](
 // runUserProcess 在用户事务内维护 requestToken 单次链：
 // 比对 → 业务 → 换新 token 并写响应头。
 //
-// 用独立的 user_request_token 表而不是 ptable.User：requestToken 的生命周期
-// 和用户资料不同，单独一行更清晰。事务身份表现在会保证同一行复用一个对象。
+// token 和 user 同一行：同一事务里业务再 GetById 会拿到同一个对象，
+// token 轮换和业务修改在提交时合并成一条 UPDATE。
 func runUserProcess(ctx context.Context, s io.Session, process func(context.Context) error) error {
 	appSession, ok := s.(*appsession.Session)
 	if !ok {
 		return fmt.Errorf("unexpected session type %T", s)
 	}
 
-	userRequestToken := ptable.UserRequestTokenTable.GetByUid(ctx, s.UID())
-	if userRequestToken == nil || userRequestToken.Token() != appSession.ReqToken() {
+	user := ptable.UserTable.GetById(ctx, s.UID())
+	if user == nil || user.RequestToken() != appSession.ReqToken() {
 		return ErrStaleRequestToken
 	}
 
@@ -100,7 +100,7 @@ func runUserProcess(ctx context.Context, s io.Session, process func(context.Cont
 	}
 
 	newToken := token.New32()
-	userRequestToken.SetToken(newToken)
+	user.SetRequestToken(newToken)
 	appSession.SetNextReqToken(newToken)
 	return nil
 }

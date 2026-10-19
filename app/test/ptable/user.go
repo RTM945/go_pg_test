@@ -22,8 +22,9 @@ const (
 	dirtyUserStatus        uint64 = 1 << 1
 	dirtyUserCreatedAt     uint64 = 1 << 2
 	dirtyUserLastLoginAt   uint64 = 1 << 3
-	dirtyUserTotalCharge   uint64 = 1 << 4
-	dirtyUserFirstChargeAt uint64 = 1 << 5
+	dirtyUserRequestToken  uint64 = 1 << 4
+	dirtyUserTotalCharge   uint64 = 1 << 5
+	dirtyUserFirstChargeAt uint64 = 1 << 6
 )
 
 type User struct {
@@ -32,6 +33,7 @@ type User struct {
 	status            int16
 	createdAt         int64
 	lastLoginAt       int64
+	requestToken      string
 	totalCharge       int64
 	firstChargeAt     int64
 	loaded            bool
@@ -39,6 +41,7 @@ type User struct {
 	origStatus        int16
 	origCreatedAt     int64
 	origLastLoginAt   int64
+	origRequestToken  string
 	origTotalCharge   int64
 	origFirstChargeAt int64
 	dirty             uint64
@@ -50,6 +53,7 @@ type userState struct {
 	status            int16
 	createdAt         int64
 	lastLoginAt       int64
+	requestToken      string
 	totalCharge       int64
 	firstChargeAt     int64
 	loaded            bool
@@ -57,6 +61,7 @@ type userState struct {
 	origStatus        int16
 	origCreatedAt     int64
 	origLastLoginAt   int64
+	origRequestToken  string
 	origTotalCharge   int64
 	origFirstChargeAt int64
 	dirty             uint64
@@ -72,6 +77,7 @@ func loadedUser(
 	status int16,
 	createdAt int64,
 	lastLoginAt int64,
+	requestToken string,
 	totalCharge int64,
 	firstChargeAt int64,
 ) *User {
@@ -81,6 +87,7 @@ func loadedUser(
 		status:            status,
 		createdAt:         createdAt,
 		lastLoginAt:       lastLoginAt,
+		requestToken:      requestToken,
 		totalCharge:       totalCharge,
 		firstChargeAt:     firstChargeAt,
 		loaded:            true,
@@ -88,6 +95,7 @@ func loadedUser(
 		origStatus:        status,
 		origCreatedAt:     createdAt,
 		origLastLoginAt:   lastLoginAt,
+		origRequestToken:  requestToken,
 		origTotalCharge:   totalCharge,
 		origFirstChargeAt: firstChargeAt,
 	}
@@ -140,6 +148,17 @@ func (o *User) SetLastLoginAt(v int64) {
 func (o *User) LastLoginAt() int64 {
 	return o.lastLoginAt
 }
+func (o *User) SetRequestToken(v string) {
+	if o.requestToken == v {
+		return
+	}
+	o.requestToken = v
+	o.dirty |= dirtyUserRequestToken
+}
+
+func (o *User) RequestToken() string {
+	return o.requestToken
+}
 func (o *User) SetTotalCharge(v int64) {
 	if o.totalCharge == v {
 		return
@@ -168,6 +187,7 @@ func (o *User) ResetToLoaded() {
 	o.status = o.origStatus
 	o.createdAt = o.origCreatedAt
 	o.lastLoginAt = o.origLastLoginAt
+	o.requestToken = o.origRequestToken
 	o.totalCharge = o.origTotalCharge
 	o.firstChargeAt = o.origFirstChargeAt
 	o.dirty = 0
@@ -180,6 +200,7 @@ func (v *User) SnapshotState() dbctx.RecordState {
 		status:            v.status,
 		createdAt:         v.createdAt,
 		lastLoginAt:       v.lastLoginAt,
+		requestToken:      v.requestToken,
 		totalCharge:       v.totalCharge,
 		firstChargeAt:     v.firstChargeAt,
 		loaded:            v.loaded,
@@ -187,6 +208,7 @@ func (v *User) SnapshotState() dbctx.RecordState {
 		origStatus:        v.origStatus,
 		origCreatedAt:     v.origCreatedAt,
 		origLastLoginAt:   v.origLastLoginAt,
+		origRequestToken:  v.origRequestToken,
 		origTotalCharge:   v.origTotalCharge,
 		origFirstChargeAt: v.origFirstChargeAt,
 		dirty:             v.dirty,
@@ -200,6 +222,7 @@ func (v *User) RestoreState(state dbctx.RecordState) {
 	v.status = s.status
 	v.createdAt = s.createdAt
 	v.lastLoginAt = s.lastLoginAt
+	v.requestToken = s.requestToken
 	v.totalCharge = s.totalCharge
 	v.firstChargeAt = s.firstChargeAt
 	v.loaded = s.loaded
@@ -207,6 +230,7 @@ func (v *User) RestoreState(state dbctx.RecordState) {
 	v.origStatus = s.origStatus
 	v.origCreatedAt = s.origCreatedAt
 	v.origLastLoginAt = s.origLastLoginAt
+	v.origRequestToken = s.origRequestToken
 	v.origTotalCharge = s.origTotalCharge
 	v.origFirstChargeAt = s.origFirstChargeAt
 	v.dirty = s.dirty
@@ -232,7 +256,7 @@ func (o *User) Identity() int64 {
 	return o.id
 }
 
-const selectColumnsUser = "id, name, status, created_at, last_login_at, total_charge, first_charge_at"
+const selectColumnsUser = "id, name, status, created_at, last_login_at, request_token, total_charge, first_charge_at"
 
 func scanUser(s dbctx.Scanner) (*User, error) {
 	var (
@@ -241,6 +265,7 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		status        int16
 		createdAt     int64
 		lastLoginAt   int64
+		requestToken  string
 		totalCharge   int64
 		firstChargeAt int64
 	)
@@ -250,6 +275,7 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		&status,
 		&createdAt,
 		&lastLoginAt,
+		&requestToken,
 		&totalCharge,
 		&firstChargeAt,
 	); err != nil {
@@ -261,6 +287,7 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 		status,
 		createdAt,
 		lastLoginAt,
+		requestToken,
 		totalCharge,
 		firstChargeAt,
 	), nil
@@ -368,6 +395,14 @@ func (v *User) FlushStmt() (string, []any) {
 		sb.WriteString("last_login_at = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
+	if v.dirty&dirtyUserRequestToken != 0 {
+		if len(args) > 0 {
+			sb.WriteString(", ")
+		}
+		args = append(args, v.requestToken)
+		sb.WriteString("request_token = $")
+		sb.WriteString(strconv.Itoa(len(args)))
+	}
 	if v.dirty&dirtyUserTotalCharge != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
@@ -400,6 +435,7 @@ func (v *User) FlushDone(rows int64) error {
 	v.origStatus = v.status
 	v.origCreatedAt = v.createdAt
 	v.origLastLoginAt = v.lastLoginAt
+	v.origRequestToken = v.requestToken
 	v.origTotalCharge = v.totalCharge
 	v.origFirstChargeAt = v.firstChargeAt
 	v.dirty = 0
@@ -430,8 +466,8 @@ func (o user) Insert(
 	dbctx.RegisterNew(ctx, v)
 	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user\" " +
-		"(name, status, created_at, last_login_at, total_charge, first_charge_at) " +
-		"VALUES ($1, $2, $3, $4, $5, $6)" +
+		"(name, status, created_at, last_login_at, request_token, total_charge, first_charge_at) " +
+		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
 		" RETURNING id"
 
 	row := tx.QueryRow(
@@ -441,6 +477,7 @@ func (o user) Insert(
 		v.status,
 		v.createdAt,
 		v.lastLoginAt,
+		v.requestToken,
 		v.totalCharge,
 		v.firstChargeAt,
 	)
@@ -459,6 +496,8 @@ func (o user) Insert(
 	v.origCreatedAt = v.createdAt
 
 	v.origLastLoginAt = v.lastLoginAt
+
+	v.origRequestToken = v.requestToken
 
 	v.origTotalCharge = v.totalCharge
 

@@ -123,7 +123,7 @@ func sdkLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID 
 				return ErrAccountBanned
 			}
 			name = user.Name()
-			upsertRequestToken(ctx, uid, requestToken)
+			user.SetRequestToken(requestToken)
 			upsertRefreshToken(ctx, uid, deviceID, refreshToken, refreshExp)
 			return nil
 		})
@@ -191,7 +191,7 @@ func autoLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID
 
 		// 登录即新会话：requestToken 链从头开始
 		requestToken = token.New32()
-		upsertRequestToken(ctx, uid, requestToken)
+		user.SetRequestToken(requestToken)
 
 		// 轮换：当前 token 挪到 prev（keepPrev 时 prev 保持不变）
 		if !keepPrev {
@@ -260,6 +260,7 @@ func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID,
 		now := time.Now().Unix()
 		user := ptable.NewUser()
 		user.SetCreatedAt(now)
+		user.SetRequestToken(requestToken) // 和 user 同一行，Insert 直接带上
 		ptable.UserTable.Insert(ctx, user)
 		newUID := user.Id()
 		if newUID == 0 {
@@ -275,7 +276,6 @@ func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID,
 
 		// 免登录行也要在这个事务里建，否则首次登录后没法免登录
 		insertRefreshToken(ctx, newUID, deviceID, refreshToken, refreshExp)
-		insertRequestToken(ctx, newUID, requestToken)
 		uid, created = newUID, true
 		name = user.Name()
 		return nil
@@ -315,21 +315,4 @@ func upsertRefreshToken(ctx context.Context, uid int64, deviceID string, refresh
 	row.SetRotatedAt(time.Now().Unix())
 	row.SetExpiresAt(exp.Unix())
 	row.SetRevokedAt(0)
-}
-
-func insertRequestToken(ctx context.Context, uid int64, requestToken string) *ptable.UserRequestToken {
-	row := ptable.NewUserRequestToken()
-	row.SetUid(uid)
-	row.SetToken(requestToken)
-	ptable.UserRequestTokenTable.Insert(ctx, row)
-	return row
-}
-
-func upsertRequestToken(ctx context.Context, uid int64, requestToken string) {
-	row := ptable.UserRequestTokenTable.GetByUid(ctx, uid)
-	if row == nil {
-		insertRequestToken(ctx, uid, requestToken)
-		return
-	}
-	row.SetToken(requestToken)
 }
