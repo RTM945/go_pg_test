@@ -105,6 +105,5 @@ func handler(log *slog.Logger) http.HandlerFunc {
 			log.Error("flush response failed", "typeId", typeId, "frames", frames, "err", err)
 			return
 		}
-		log.Debug("response sent", "typeId", typeId, "frames", frames)
 	}
 }

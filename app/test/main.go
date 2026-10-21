@@ -24,7 +24,7 @@ const shutdownTimeout = 10 * time.Second
 var (
 	schemaPath = flag.String("schema", "app/test/pdb.xml", "path to pdb.xml")
 	addr       = flag.String("addr", ":8080", "listen address")
-	logLevel   = flag.String("log-level", "info", "log level: debug / info / warn / error")
+	logLevel   = flag.String("log-level", "debug", "log level: debug / info / warn / error")
 	logFormat  = flag.String("log-format", "text", "log format: text / json")
 	logPath    = flag.String("log-path", "", "log file path; empty writes to stdout")
 	logMaxSize = flag.Int("log-max-size", 100, "rotate the log file after this many MB")
