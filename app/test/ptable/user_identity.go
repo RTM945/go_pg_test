@@ -31,6 +31,7 @@ type UserIdentity struct {
 	uid             int64
 	createdAt       int64
 	loaded          bool
+	deleted         bool
 	origPlatform    int16
 	origPlatformUID string
 	origUid         int64
@@ -45,6 +46,7 @@ type userIdentityState struct {
 	uid             int64
 	createdAt       int64
 	loaded          bool
+	deleted         bool
 	origPlatform    int16
 	origPlatformUID string
 	origUid         int64
@@ -130,7 +132,21 @@ func (o *UserIdentity) ResetToLoaded() {
 	o.platformUID = o.origPlatformUID
 	o.uid = o.origUid
 	o.createdAt = o.origCreatedAt
+	o.deleted = false
 	o.dirty = 0
+}
+
+// Delete 把这一行标记为待删除；实际 DELETE 在事务提交前由 flush 统一发出。
+func (v *UserIdentity) Delete() {
+	if !v.loaded || v.deleted {
+		return
+	}
+	v.deleted = true
+}
+
+// IsDeleted 报告这一行是否在本次事务里被标记删除。
+func (v *UserIdentity) IsDeleted() bool {
+	return v.deleted
 }
 
 func (v *UserIdentity) SnapshotState() dbctx.RecordState {
@@ -141,6 +157,7 @@ func (v *UserIdentity) SnapshotState() dbctx.RecordState {
 		uid:             v.uid,
 		createdAt:       v.createdAt,
 		loaded:          v.loaded,
+		deleted:         v.deleted,
 		origPlatform:    v.origPlatform,
 		origPlatformUID: v.origPlatformUID,
 		origUid:         v.origUid,
@@ -157,6 +174,7 @@ func (v *UserIdentity) RestoreState(state dbctx.RecordState) {
 	v.uid = s.uid
 	v.createdAt = s.createdAt
 	v.loaded = s.loaded
+	v.deleted = s.deleted
 	v.origPlatform = s.origPlatform
 	v.origPlatformUID = s.origPlatformUID
 	v.origUid = s.origUid
@@ -168,6 +186,7 @@ func (v *UserIdentity) RestoreState(state dbctx.RecordState) {
 func (v *UserIdentity) ResetNew() {
 	v.id = 0
 	v.loaded = false
+	v.deleted = false
 	v.dirty = 0
 }
 
@@ -228,6 +247,9 @@ func (o userIdentity) GetById(
 	id int64,
 ) *UserIdentity {
 	if v, ok := dbctx.GetCachedRecordAs[*UserIdentity](ctx, "user_identity", id); ok {
+		if v.IsDeleted() {
+			return nil
+		}
 		return v
 	}
 	return o.getId(
@@ -314,6 +336,20 @@ func (o userIdentity) SelectByPlatformPlatformUID(
 	)
 }
 
+// DeleteById 在事务里按主键标记删除；找不到返回 false。
+// 实际 DELETE 在事务提交前由 flush 统一发出，失败时由 memento 恢复。
+func (o userIdentity) DeleteById(
+	ctx context.Context,
+	id int64,
+) bool {
+	v := o.GetById(ctx, id)
+	if v == nil {
+		return false
+	}
+	v.Delete()
+	return true
+}
+
 func (o userIdentity) getAll(
 	ctx context.Context,
 	q dbctx.Querier,
@@ -340,9 +376,15 @@ var ErrUserIdentityNotFound = errors.New(
 )
 
 // FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// Transaction 据此跳过这一行，不占用一次往返。
+// deleted 时返回 DELETE；Transaction 据此跳过没有变化的行。
 func (v *UserIdentity) FlushStmt() (string, []any) {
-	if !v.loaded || v.dirty == 0 {
+	if !v.loaded {
+		return "", nil
+	}
+	if v.deleted {
+		return "DELETE FROM \"user_identity\" WHERE id = $1", []any{v.id}
+	}
+	if v.dirty == 0 {
 		return "", nil
 	}
 	var sb strings.Builder
@@ -386,11 +428,18 @@ func (v *UserIdentity) FlushStmt() (string, []any) {
 	return sb.String(), args
 }
 
-// FlushDone 实现 dbctx.Flusher，在对应 UPDATE 执行成功后回调，
-// 同步 orig 快照并清空 dirty；rows == 0 说明这一行已被删除或从未存在。
+// FlushDone 实现 dbctx.Flusher，在对应 UPDATE/DELETE 执行成功后回调。
+// UPDATE 同步 orig 快照并清空 dirty；DELETE 把对象置为未加载。
+// rows == 0 说明这一行已经不存在。
 func (v *UserIdentity) FlushDone(rows int64) error {
 	if rows == 0 {
 		return ErrUserIdentityNotFound
+	}
+	if v.deleted {
+		v.dirty = 0
+		v.loaded = false
+		v.deleted = false
+		return nil
 	}
 	v.origPlatform = v.platform
 	v.origPlatformUID = v.platformUID

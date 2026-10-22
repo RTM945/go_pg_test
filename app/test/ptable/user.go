@@ -37,6 +37,7 @@ type User struct {
 	totalCharge       int64
 	firstChargeAt     int64
 	loaded            bool
+	deleted           bool
 	origName          string
 	origStatus        int16
 	origCreatedAt     int64
@@ -57,6 +58,7 @@ type userState struct {
 	totalCharge       int64
 	firstChargeAt     int64
 	loaded            bool
+	deleted           bool
 	origName          string
 	origStatus        int16
 	origCreatedAt     int64
@@ -190,7 +192,21 @@ func (o *User) ResetToLoaded() {
 	o.requestToken = o.origRequestToken
 	o.totalCharge = o.origTotalCharge
 	o.firstChargeAt = o.origFirstChargeAt
+	o.deleted = false
 	o.dirty = 0
+}
+
+// Delete 把这一行标记为待删除；实际 DELETE 在事务提交前由 flush 统一发出。
+func (v *User) Delete() {
+	if !v.loaded || v.deleted {
+		return
+	}
+	v.deleted = true
+}
+
+// IsDeleted 报告这一行是否在本次事务里被标记删除。
+func (v *User) IsDeleted() bool {
+	return v.deleted
 }
 
 func (v *User) SnapshotState() dbctx.RecordState {
@@ -204,6 +220,7 @@ func (v *User) SnapshotState() dbctx.RecordState {
 		totalCharge:       v.totalCharge,
 		firstChargeAt:     v.firstChargeAt,
 		loaded:            v.loaded,
+		deleted:           v.deleted,
 		origName:          v.origName,
 		origStatus:        v.origStatus,
 		origCreatedAt:     v.origCreatedAt,
@@ -226,6 +243,7 @@ func (v *User) RestoreState(state dbctx.RecordState) {
 	v.totalCharge = s.totalCharge
 	v.firstChargeAt = s.firstChargeAt
 	v.loaded = s.loaded
+	v.deleted = s.deleted
 	v.origName = s.origName
 	v.origStatus = s.origStatus
 	v.origCreatedAt = s.origCreatedAt
@@ -240,6 +258,7 @@ func (v *User) RestoreState(state dbctx.RecordState) {
 func (v *User) ResetNew() {
 	v.id = 0
 	v.loaded = false
+	v.deleted = false
 	v.dirty = 0
 }
 
@@ -309,6 +328,9 @@ func (o user) GetById(
 	id int64,
 ) *User {
 	if v, ok := dbctx.GetCachedRecordAs[*User](ctx, "user", id); ok {
+		if v.IsDeleted() {
+			return nil
+		}
 		return v
 	}
 	return o.getId(
@@ -327,6 +349,20 @@ func (o user) SelectById(
 		dbctx.QuerierFromCtx(ctx),
 		id,
 	)
+}
+
+// DeleteById 在事务里按主键标记删除；找不到返回 false。
+// 实际 DELETE 在事务提交前由 flush 统一发出，失败时由 memento 恢复。
+func (o user) DeleteById(
+	ctx context.Context,
+	id int64,
+) bool {
+	v := o.GetById(ctx, id)
+	if v == nil {
+		return false
+	}
+	v.Delete()
+	return true
 }
 
 func (o user) getAll(
@@ -355,9 +391,15 @@ var ErrUserNotFound = errors.New(
 )
 
 // FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// Transaction 据此跳过这一行，不占用一次往返。
+// deleted 时返回 DELETE；Transaction 据此跳过没有变化的行。
 func (v *User) FlushStmt() (string, []any) {
-	if !v.loaded || v.dirty == 0 {
+	if !v.loaded {
+		return "", nil
+	}
+	if v.deleted {
+		return "DELETE FROM \"user\" WHERE id = $1", []any{v.id}
+	}
+	if v.dirty == 0 {
 		return "", nil
 	}
 	var sb strings.Builder
@@ -425,11 +467,18 @@ func (v *User) FlushStmt() (string, []any) {
 	return sb.String(), args
 }
 
-// FlushDone 实现 dbctx.Flusher，在对应 UPDATE 执行成功后回调，
-// 同步 orig 快照并清空 dirty；rows == 0 说明这一行已被删除或从未存在。
+// FlushDone 实现 dbctx.Flusher，在对应 UPDATE/DELETE 执行成功后回调。
+// UPDATE 同步 orig 快照并清空 dirty；DELETE 把对象置为未加载。
+// rows == 0 说明这一行已经不存在。
 func (v *User) FlushDone(rows int64) error {
 	if rows == 0 {
 		return ErrUserNotFound
+	}
+	if v.deleted {
+		v.dirty = 0
+		v.loaded = false
+		v.deleted = false
+		return nil
 	}
 	v.origName = v.name
 	v.origStatus = v.status
