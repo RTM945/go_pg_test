@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+option go_package = "go_pg_test/genpb/test;testpb";
+
+import "ext.proto";
+
+// 拉取邮箱。服务端顺便把当前生效的全服 GM 邮件投递到本玩家：
+// gm_mail 是全服模板，user_mail 才是玩家自己的邮件。
+message CMails {
+  option (proto.type_id) = 107;
+}
+
+// 对应 Java 的 MailData。key 是 user_mail.id；全服 GM 邮件
+// confId = -gm_mail.id，定向直投邮件 confId = 0。
+message MailData {
+  int64 key = 1;
+  int32 confId = 2;
+  int64 mailTime = 3;
+  // 1=已读/已领取，2=未读，3=已读但附件未领取
+  int32 state = 4;
+  string params = 5;    // json
+  string awardList = 6; // json
+}
+
+message SMails {
+  option (proto.type_id) = 108;
+
+  repeated MailData mails = 1;
+}
+
+// 标记已读，没有响应包。有附件时状态变 3，否则变 1。
+message CReadMail {
+  option (proto.type_id) = 109;
+
+  int64 key = 1;
+}
+
+// 领取附件。当前没有道具/资源系统，真正发奖逻辑之后接在这里。
+message CGetAttachment {
+  option (proto.type_id) = 110;
+
+  int64 key = 1;
+}
+
+message SGetAttachment {
+  option (proto.type_id) = 111;
+
+  int64 key = 1;
+}

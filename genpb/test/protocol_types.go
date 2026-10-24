@@ -6,6 +6,22 @@ const PROTOCOL_TYPE_Login int32 = 101
 
 const PROTOCOL_TYPE_LoginResult int32 = 102
 
+const PROTOCOL_TYPE_Heartbeat int32 = 103
+
+const PROTOCOL_TYPE_PollEvents int32 = 105
+
+const PROTOCOL_TYPE_EventVersions int32 = 106
+
+const PROTOCOL_TYPE_CMails int32 = 107
+
+const PROTOCOL_TYPE_SMails int32 = 108
+
+const PROTOCOL_TYPE_CReadMail int32 = 109
+
+const PROTOCOL_TYPE_CGetAttachment int32 = 110
+
+const PROTOCOL_TYPE_SGetAttachment int32 = 111
+
 const PROTOCOL_TYPE_CRedEnvelope int32 = 123
 
 const PROTOCOL_TYPE_SRedEnvelope int32 = 124

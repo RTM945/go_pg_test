@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"go_pg_test/app/test/logic/mail"
 	appsession "go_pg_test/app/test/session"
 	"go_pg_test/common/dispatch"
 	"go_pg_test/common/httpserver"
@@ -74,10 +75,23 @@ func handler(log *slog.Logger) http.HandlerFunc {
 			case errors.Is(err, dispatch.ErrUnknownTypeId), errors.Is(err, dispatch.ErrMalformedPayload):
 				log.Warn("Wrong typeId", "typeId", typeId, "remote", r.RemoteAddr, "err", err)
 				http.Error(w, err.Error(), http.StatusBadRequest)
-			// 客户端手里的 requestToken 过期了：上一次成功响应可能丢了。
-			// 客户端应静默走免登录换一套新 token，而不是拿旧 token 重试。
+			// 客户端手里的 requestToken 已过期/被消费：上一次成功响应可能丢了。
+			// 客户端不要重放原请求，应静默免登录并重新同步状态。
 			case errors.Is(err, ErrStaleRequestToken):
 				writeErr(w, http.StatusUnauthorized, "REQ_TOKEN_STALE", "request token is stale")
+			// Redis 快速去重：同一个 token 已经在处理/刚处理完。
+			// 客户端的处理方式同上：不要重放，按需重新登录/同步。
+			case errors.Is(err, ErrDuplicateRequest):
+				writeErr(w, http.StatusConflict, "REQ_DUP", "duplicate request")
+			case errors.Is(err, redis.ErrInvalidRequestToken):
+				writeErr(w, http.StatusBadRequest, "REQ_TOKEN_INVALID", "invalid request token")
+			case errors.Is(err, mail.ErrMailNotFound):
+				writeErr(w, http.StatusNotFound, "MAIL_NOT_FOUND", "mail not found")
+			// Redis 故障：幂等检查做不了，fail closed，让客户端稍后重试
+			case errors.Is(err, redis.ErrRedisUnavailable):
+				log.Error("request token check failed", "typeId", typeId, "uid", s.UID(), "err", err)
+				w.Header().Set("Retry-After", "1")
+				writeErr(w, http.StatusServiceUnavailable, "BUSY", "service busy")
 			// 同一个 uid 的上一次请求还占着咨询锁。这不是服务端的错，
 			// 语义是"你上一次还没做完，稍后重试"——回 500 的话客户端会当成 bug。
 			case errors.Is(err, dbpool.ErrAdvisoryLockNotAcquired):

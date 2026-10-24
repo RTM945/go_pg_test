@@ -13,22 +13,24 @@ import (
 	"pdbgen/dbctx"
 )
 
-var UserGmMailTable gMMail
+var GmMailTable gMMail
 
 type gMMail struct{}
 
 const (
-	dirtyGMMailParams        uint64 = 1 << 0
-	dirtyGMMailAwardList     uint64 = 1 << 1
-	dirtyGMMailStartAt       uint64 = 1 << 2
-	dirtyGMMailEndAt         uint64 = 1 << 3
-	dirtyGMMailChannel       uint64 = 1 << 4
-	dirtyGMMailUserCreatedAt uint64 = 1 << 5
-	dirtyGMMailCondition     uint64 = 1 << 6
+	dirtyGMMailUuid          uint64 = 1 << 0
+	dirtyGMMailParams        uint64 = 1 << 1
+	dirtyGMMailAwardList     uint64 = 1 << 2
+	dirtyGMMailStartAt       uint64 = 1 << 3
+	dirtyGMMailEndAt         uint64 = 1 << 4
+	dirtyGMMailChannel       uint64 = 1 << 5
+	dirtyGMMailUserCreatedAt uint64 = 1 << 6
+	dirtyGMMailCondition     uint64 = 1 << 7
 )
 
 type GMMail struct {
 	id                int64
+	uuid              string
 	params            string
 	awardList         string
 	startAt           int64
@@ -38,6 +40,7 @@ type GMMail struct {
 	condition         string
 	loaded            bool
 	deleted           bool
+	origUuid          string
 	origParams        string
 	origAwardList     string
 	origStartAt       int64
@@ -50,6 +53,7 @@ type GMMail struct {
 
 type gMMailState struct {
 	id                int64
+	uuid              string
 	params            string
 	awardList         string
 	startAt           int64
@@ -59,6 +63,7 @@ type gMMailState struct {
 	condition         string
 	loaded            bool
 	deleted           bool
+	origUuid          string
 	origParams        string
 	origAwardList     string
 	origStartAt       int64
@@ -75,6 +80,7 @@ func NewGMMail() *GMMail {
 
 func loadedGMMail(
 	id int64,
+	uuid string,
 	params string,
 	awardList string,
 	startAt int64,
@@ -85,6 +91,7 @@ func loadedGMMail(
 ) *GMMail {
 	return &GMMail{
 		id:                id,
+		uuid:              uuid,
 		params:            params,
 		awardList:         awardList,
 		startAt:           startAt,
@@ -93,6 +100,7 @@ func loadedGMMail(
 		userCreatedAt:     userCreatedAt,
 		condition:         condition,
 		loaded:            true,
+		origUuid:          uuid,
 		origParams:        params,
 		origAwardList:     awardList,
 		origStartAt:       startAt,
@@ -105,6 +113,17 @@ func loadedGMMail(
 
 func (o *GMMail) Id() int64 {
 	return o.id
+}
+func (o *GMMail) SetUuid(v string) {
+	if o.uuid == v {
+		return
+	}
+	o.uuid = v
+	o.dirty |= dirtyGMMailUuid
+}
+
+func (o *GMMail) Uuid() string {
+	return o.uuid
 }
 func (o *GMMail) SetParams(v string) {
 	if o.params == v {
@@ -185,6 +204,7 @@ func (o *GMMail) Condition() string {
 }
 
 func (o *GMMail) ResetToLoaded() {
+	o.uuid = o.origUuid
 	o.params = o.origParams
 	o.awardList = o.origAwardList
 	o.startAt = o.origStartAt
@@ -212,6 +232,7 @@ func (v *GMMail) IsDeleted() bool {
 func (v *GMMail) SnapshotState() dbctx.RecordState {
 	return gMMailState{
 		id:                v.id,
+		uuid:              v.uuid,
 		params:            v.params,
 		awardList:         v.awardList,
 		startAt:           v.startAt,
@@ -221,6 +242,7 @@ func (v *GMMail) SnapshotState() dbctx.RecordState {
 		condition:         v.condition,
 		loaded:            v.loaded,
 		deleted:           v.deleted,
+		origUuid:          v.origUuid,
 		origParams:        v.origParams,
 		origAwardList:     v.origAwardList,
 		origStartAt:       v.origStartAt,
@@ -235,6 +257,7 @@ func (v *GMMail) SnapshotState() dbctx.RecordState {
 func (v *GMMail) RestoreState(state dbctx.RecordState) {
 	s := state.(gMMailState)
 	v.id = s.id
+	v.uuid = s.uuid
 	v.params = s.params
 	v.awardList = s.awardList
 	v.startAt = s.startAt
@@ -244,6 +267,7 @@ func (v *GMMail) RestoreState(state dbctx.RecordState) {
 	v.condition = s.condition
 	v.loaded = s.loaded
 	v.deleted = s.deleted
+	v.origUuid = s.origUuid
 	v.origParams = s.origParams
 	v.origAwardList = s.origAwardList
 	v.origStartAt = s.origStartAt
@@ -266,7 +290,7 @@ func (v *GMMail) ResetNew() {
 // Transaction 用它们把同一行解析到同一个缓存记录
 // （xdb: getCachedTRecord / addCachedTRecord）。
 func (o *GMMail) TableName() string {
-	return "user_gm_mail"
+	return "gm_mail"
 }
 
 // Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
@@ -275,11 +299,12 @@ func (o *GMMail) Identity() int64 {
 	return o.id
 }
 
-const selectColumnsGMMail = "id, params, award_list, start_at, end_at, channel, user_created_at, condition"
+const selectColumnsGMMail = "\"id\", \"uuid\", \"params\", \"award_list\", \"start_at\", \"end_at\", \"channel\", \"user_created_at\", \"condition\""
 
 func scanGMMail(s dbctx.Scanner) (*GMMail, error) {
 	var (
 		id            int64
+		uuid          string
 		params        string
 		awardList     string
 		startAt       int64
@@ -290,6 +315,7 @@ func scanGMMail(s dbctx.Scanner) (*GMMail, error) {
 	)
 	if err := s.Scan(
 		&id,
+		&uuid,
 		&params,
 		&awardList,
 		&startAt,
@@ -302,6 +328,7 @@ func scanGMMail(s dbctx.Scanner) (*GMMail, error) {
 	}
 	return loadedGMMail(
 		id,
+		uuid,
 		params,
 		awardList,
 		startAt,
@@ -318,8 +345,8 @@ func (o gMMail) getId(
 	id int64,
 ) *GMMail {
 	const query = "SELECT " + selectColumnsGMMail +
-		" FROM \"user_gm_mail\"" +
-		" WHERE id = $1"
+		" FROM \"gm_mail\"" +
+		" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanGMMail, id)
 }
 
@@ -327,7 +354,7 @@ func (o gMMail) GetById(
 	ctx context.Context,
 	id int64,
 ) *GMMail {
-	if v, ok := dbctx.GetCachedRecordAs[*GMMail](ctx, "user_gm_mail", id); ok {
+	if v, ok := dbctx.GetCachedRecordAs[*GMMail](ctx, "gm_mail", id); ok {
 		if v.IsDeleted() {
 			return nil
 		}
@@ -351,6 +378,39 @@ func (o gMMail) SelectById(
 	)
 }
 
+func (o gMMail) getUuid(
+	ctx context.Context,
+	q dbctx.Querier,
+	uuid string,
+) *GMMail {
+	const query = "SELECT " + selectColumnsGMMail +
+		" FROM \"gm_mail\"" +
+		" WHERE \"uuid\" = $1"
+	return dbctx.QueryOne(ctx, q, query, scanGMMail, uuid)
+}
+
+func (o gMMail) GetByUuid(
+	ctx context.Context,
+	uuid string,
+) *GMMail {
+	return o.getUuid(
+		ctx,
+		dbctx.SQLTxFromCtx(ctx),
+		uuid,
+	)
+}
+
+func (o gMMail) SelectByUuid(
+	ctx context.Context,
+	uuid string,
+) *GMMail {
+	return o.getUuid(
+		ctx,
+		dbctx.QuerierFromCtx(ctx),
+		uuid,
+	)
+}
+
 // DeleteById 在事务里按主键标记删除；找不到返回 false。
 // 实际 DELETE 在事务提交前由 flush 统一发出，失败时由 memento 恢复。
 func (o gMMail) DeleteById(
@@ -370,7 +430,7 @@ func (o gMMail) getAll(
 	q dbctx.Querier,
 ) []*GMMail {
 	const query = "SELECT " + selectColumnsGMMail +
-		" FROM \"user_gm_mail\""
+		" FROM \"gm_mail\""
 	return dbctx.QueryList(ctx, q, query, scanGMMail)
 }
 
@@ -387,7 +447,7 @@ func (o gMMail) SelectAll(
 }
 
 var ErrGMMailNotFound = errors.New(
-	"user_gm_mail: row not found at update time",
+	"gm_mail: row not found at update time",
 )
 
 // FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
@@ -397,20 +457,28 @@ func (v *GMMail) FlushStmt() (string, []any) {
 		return "", nil
 	}
 	if v.deleted {
-		return "DELETE FROM \"user_gm_mail\" WHERE id = $1", []any{v.id}
+		return "DELETE FROM \"gm_mail\" WHERE \"id\" = $1", []any{v.id}
 	}
 	if v.dirty == 0 {
 		return "", nil
 	}
 	var sb strings.Builder
 	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE \"user_gm_mail\" SET ")
+	sb.WriteString("UPDATE \"gm_mail\" SET ")
+	if v.dirty&dirtyGMMailUuid != 0 {
+		if len(args) > 0 {
+			sb.WriteString(", ")
+		}
+		args = append(args, v.uuid)
+		sb.WriteString("\"uuid\" = $")
+		sb.WriteString(strconv.Itoa(len(args)))
+	}
 	if v.dirty&dirtyGMMailParams != 0 {
 		if len(args) > 0 {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.params)
-		sb.WriteString("params = $")
+		sb.WriteString("\"params\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyGMMailAwardList != 0 {
@@ -418,7 +486,7 @@ func (v *GMMail) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.awardList)
-		sb.WriteString("award_list = $")
+		sb.WriteString("\"award_list\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyGMMailStartAt != 0 {
@@ -426,7 +494,7 @@ func (v *GMMail) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.startAt)
-		sb.WriteString("start_at = $")
+		sb.WriteString("\"start_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyGMMailEndAt != 0 {
@@ -434,7 +502,7 @@ func (v *GMMail) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.endAt)
-		sb.WriteString("end_at = $")
+		sb.WriteString("\"end_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyGMMailChannel != 0 {
@@ -442,7 +510,7 @@ func (v *GMMail) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.channel)
-		sb.WriteString("channel = $")
+		sb.WriteString("\"channel\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyGMMailUserCreatedAt != 0 {
@@ -450,7 +518,7 @@ func (v *GMMail) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.userCreatedAt)
-		sb.WriteString("user_created_at = $")
+		sb.WriteString("\"user_created_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyGMMailCondition != 0 {
@@ -458,11 +526,11 @@ func (v *GMMail) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.condition)
-		sb.WriteString("condition = $")
+		sb.WriteString("\"condition\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	args = append(args, v.id)
-	sb.WriteString(" WHERE id = $")
+	sb.WriteString(" WHERE \"id\" = $")
 	sb.WriteString(strconv.Itoa(len(args)))
 	return sb.String(), args
 }
@@ -480,6 +548,7 @@ func (v *GMMail) FlushDone(rows int64) error {
 		v.deleted = false
 		return nil
 	}
+	v.origUuid = v.uuid
 	v.origParams = v.params
 	v.origAwardList = v.awardList
 	v.origStartAt = v.startAt
@@ -503,7 +572,7 @@ func (o gMMail) Update(
 	}
 	tag, err := dbctx.SQLTxFromCtx(ctx).Exec(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("user_gm_mail update: %w", err)
+		return fmt.Errorf("gm_mail update: %w", err)
 	}
 	return v.FlushDone(tag.RowsAffected())
 }
@@ -514,14 +583,15 @@ func (o gMMail) Insert(
 ) {
 	dbctx.RegisterNew(ctx, v)
 	tx := dbctx.SQLTxFromCtx(ctx)
-	const query = "INSERT INTO \"user_gm_mail\" " +
-		"(params, award_list, start_at, end_at, channel, user_created_at, condition) " +
-		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
-		" RETURNING id"
+	const query = "INSERT INTO \"gm_mail\" " +
+		"(\"uuid\", \"params\", \"award_list\", \"start_at\", \"end_at\", \"channel\", \"user_created_at\", \"condition\") " +
+		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8)" +
+		" RETURNING \"id\""
 
 	row := tx.QueryRow(
 		ctx,
 		query,
+		v.uuid,
 		v.params,
 		v.awardList,
 		v.startAt,
@@ -537,6 +607,8 @@ func (o gMMail) Insert(
 	}
 
 	v.loaded = true
+
+	v.origUuid = v.uuid
 
 	v.origParams = v.params
 

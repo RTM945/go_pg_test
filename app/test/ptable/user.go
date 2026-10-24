@@ -275,7 +275,7 @@ func (o *User) Identity() int64 {
 	return o.id
 }
 
-const selectColumnsUser = "id, name, status, created_at, last_login_at, request_token, total_charge, first_charge_at"
+const selectColumnsUser = "\"id\", \"name\", \"status\", \"created_at\", \"last_login_at\", \"request_token\", \"total_charge\", \"first_charge_at\""
 
 func scanUser(s dbctx.Scanner) (*User, error) {
 	var (
@@ -319,7 +319,7 @@ func (o user) getId(
 ) *User {
 	const query = "SELECT " + selectColumnsUser +
 		" FROM \"user\"" +
-		" WHERE id = $1"
+		" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUser, id)
 }
 
@@ -397,7 +397,7 @@ func (v *User) FlushStmt() (string, []any) {
 		return "", nil
 	}
 	if v.deleted {
-		return "DELETE FROM \"user\" WHERE id = $1", []any{v.id}
+		return "DELETE FROM \"user\" WHERE \"id\" = $1", []any{v.id}
 	}
 	if v.dirty == 0 {
 		return "", nil
@@ -410,7 +410,7 @@ func (v *User) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.name)
-		sb.WriteString("name = $")
+		sb.WriteString("\"name\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserStatus != 0 {
@@ -418,7 +418,7 @@ func (v *User) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.status)
-		sb.WriteString("status = $")
+		sb.WriteString("\"status\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserCreatedAt != 0 {
@@ -426,7 +426,7 @@ func (v *User) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.createdAt)
-		sb.WriteString("created_at = $")
+		sb.WriteString("\"created_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserLastLoginAt != 0 {
@@ -434,7 +434,7 @@ func (v *User) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.lastLoginAt)
-		sb.WriteString("last_login_at = $")
+		sb.WriteString("\"last_login_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserRequestToken != 0 {
@@ -442,7 +442,7 @@ func (v *User) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.requestToken)
-		sb.WriteString("request_token = $")
+		sb.WriteString("\"request_token\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserTotalCharge != 0 {
@@ -450,7 +450,7 @@ func (v *User) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.totalCharge)
-		sb.WriteString("total_charge = $")
+		sb.WriteString("\"total_charge\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserFirstChargeAt != 0 {
@@ -458,11 +458,11 @@ func (v *User) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.firstChargeAt)
-		sb.WriteString("first_charge_at = $")
+		sb.WriteString("\"first_charge_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	args = append(args, v.id)
-	sb.WriteString(" WHERE id = $")
+	sb.WriteString(" WHERE \"id\" = $")
 	sb.WriteString(strconv.Itoa(len(args)))
 	return sb.String(), args
 }
@@ -515,9 +515,9 @@ func (o user) Insert(
 	dbctx.RegisterNew(ctx, v)
 	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user\" " +
-		"(name, status, created_at, last_login_at, request_token, total_charge, first_charge_at) " +
+		"(\"name\", \"status\", \"created_at\", \"last_login_at\", \"request_token\", \"total_charge\", \"first_charge_at\") " +
 		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
-		" RETURNING id"
+		" RETURNING \"id\""
 
 	row := tx.QueryRow(
 		ctx,

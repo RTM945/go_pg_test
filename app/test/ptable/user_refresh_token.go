@@ -275,7 +275,7 @@ func (o *UserRefreshToken) Identity() int64 {
 	return o.id
 }
 
-const selectColumnsUserRefreshToken = "id, uid, device_id, token, prev_token, rotated_at, expires_at, revoked_at"
+const selectColumnsUserRefreshToken = "\"id\", \"uid\", \"device_id\", \"token\", \"prev_token\", \"rotated_at\", \"expires_at\", \"revoked_at\""
 
 func scanUserRefreshToken(s dbctx.Scanner) (*UserRefreshToken, error) {
 	var (
@@ -319,7 +319,7 @@ func (o userRefreshToken) getId(
 ) *UserRefreshToken {
 	const query = "SELECT " + selectColumnsUserRefreshToken +
 		" FROM \"user_refresh_token\"" +
-		" WHERE id = $1"
+		" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, id)
 }
 
@@ -358,7 +358,7 @@ func (o userRefreshToken) getUidDeviceId(
 ) *UserRefreshToken {
 	const query = "SELECT " + selectColumnsUserRefreshToken +
 		" FROM \"user_refresh_token\"" +
-		" WHERE uid = $1 AND device_id = $2"
+		" WHERE \"uid\" = $1 AND \"device_id\" = $2"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, uid, deviceId)
 }
 
@@ -391,7 +391,7 @@ func (o userRefreshToken) getToken(
 ) *UserRefreshToken {
 	const query = "SELECT " + selectColumnsUserRefreshToken +
 		" FROM \"user_refresh_token\"" +
-		" WHERE token = $1"
+		" WHERE \"token\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, token)
 }
 
@@ -463,7 +463,7 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 		return "", nil
 	}
 	if v.deleted {
-		return "DELETE FROM \"user_refresh_token\" WHERE id = $1", []any{v.id}
+		return "DELETE FROM \"user_refresh_token\" WHERE \"id\" = $1", []any{v.id}
 	}
 	if v.dirty == 0 {
 		return "", nil
@@ -476,7 +476,7 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.uid)
-		sb.WriteString("uid = $")
+		sb.WriteString("\"uid\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserRefreshTokenDeviceId != 0 {
@@ -484,7 +484,7 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.deviceId)
-		sb.WriteString("device_id = $")
+		sb.WriteString("\"device_id\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserRefreshTokenToken != 0 {
@@ -492,7 +492,7 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.token)
-		sb.WriteString("token = $")
+		sb.WriteString("\"token\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserRefreshTokenPrevToken != 0 {
@@ -500,7 +500,7 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.prevToken)
-		sb.WriteString("prev_token = $")
+		sb.WriteString("\"prev_token\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserRefreshTokenRotatedAt != 0 {
@@ -508,7 +508,7 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.rotatedAt)
-		sb.WriteString("rotated_at = $")
+		sb.WriteString("\"rotated_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserRefreshTokenExpiresAt != 0 {
@@ -516,7 +516,7 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.expiresAt)
-		sb.WriteString("expires_at = $")
+		sb.WriteString("\"expires_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserRefreshTokenRevokedAt != 0 {
@@ -524,11 +524,11 @@ func (v *UserRefreshToken) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.revokedAt)
-		sb.WriteString("revoked_at = $")
+		sb.WriteString("\"revoked_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	args = append(args, v.id)
-	sb.WriteString(" WHERE id = $")
+	sb.WriteString(" WHERE \"id\" = $")
 	sb.WriteString(strconv.Itoa(len(args)))
 	return sb.String(), args
 }
@@ -581,9 +581,9 @@ func (o userRefreshToken) Insert(
 	dbctx.RegisterNew(ctx, v)
 	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user_refresh_token\" " +
-		"(uid, device_id, token, prev_token, rotated_at, expires_at, revoked_at) " +
+		"(\"uid\", \"device_id\", \"token\", \"prev_token\", \"rotated_at\", \"expires_at\", \"revoked_at\") " +
 		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
-		" RETURNING id"
+		" RETURNING \"id\""
 
 	row := tx.QueryRow(
 		ctx,

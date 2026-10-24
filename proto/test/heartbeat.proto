@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+option go_package = "go_pg_test/genpb/test;testpb";
+
+import "ext.proto";
+
+// 心跳只负责保活：服务端验 loginToken（顺带续 Redis TTL），
+// 不开事务、不消费 requestToken、不查业务表。
+//
+// 响应体是空的；事件请通过 PollEvents 拉取，不走心跳。
+message Heartbeat {
+  option (proto.type_id) = 103;
+}
+
+// 104 曾经是 HeartbeatResult，暂时空着，避免以后被别的协议复用。

@@ -15,11 +15,13 @@ import (
 	"fmt"
 	stdio "io"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"go_pg_test/app/test/logic/event"
 	"go_pg_test/app/test/msg"
 	testpb "go_pg_test/genpb/test"
 	gopgio "go_pg_test/io"
@@ -34,6 +36,15 @@ const (
 
 type handler func(payload []byte) error
 
+type eventVersion struct {
+	global int64
+	user   int64
+}
+
+func (v eventVersion) String() string {
+	return fmt.Sprintf("{global:%d user:%d}", v.global, v.user)
+}
+
 type Robot struct {
 	addr     string
 	account  string
@@ -41,12 +52,18 @@ type Robot struct {
 	client   *http.Client
 	handlers map[int32]handler
 
-	loginToken   string
-	refreshToken string
-	reqToken     string
-	uid          int64
-	name         string
-	lastRed      *msg.SRedEnvelope
+	loginToken            string
+	refreshToken          string
+	reqToken              string
+	uid                   int64
+	name                  string
+	lastRed               *msg.SRedEnvelope
+	eventVersions         map[int32]eventVersion
+	eventVersionsReceived bool
+	expectEvent           bool
+	mailList              []*testpb.MailData
+	attachmentKey         int64
+	expectMail            bool
 }
 
 func NewRobot(addr, account, deviceID string) *Robot {
@@ -84,6 +101,35 @@ func (r *Robot) registerHandlers() {
 	r.Register(testpb.PROTOCOL_TYPE_SRedEnvelope, msg.NewSRedEnvelope, func(m *msg.SRedEnvelope) error {
 		r.lastRed = m
 		log.Printf("← SRedEnvelope actId=%d todayCount=%d total=%d", m.ActId, m.TodayCount, m.Total)
+		return nil
+	})
+
+	r.Register(testpb.PROTOCOL_TYPE_EventVersions, msg.NewEventVersions, func(m *msg.EventVersions) error {
+		r.eventVersionsReceived = true
+		r.eventVersions = make(map[int32]eventVersion, len(m.Versions))
+		for typ, v := range m.Versions {
+			if v == nil {
+				continue
+			}
+			r.eventVersions[typ] = eventVersion{global: v.Global, user: v.User}
+		}
+		log.Printf("← EventVersions %v", r.eventVersions)
+		return nil
+	})
+
+	r.Register(testpb.PROTOCOL_TYPE_SMails, msg.NewSMails, func(m *msg.SMails) error {
+		r.mailList = m.Mails
+		log.Printf("← SMails count=%d", len(m.Mails))
+		for _, mail := range m.Mails {
+			log.Printf("   mail key=%d confId=%d state=%d mailTime=%d params=%s awards=%s",
+				mail.Key, mail.ConfId, mail.State, mail.MailTime, mail.Params, mail.AwardList)
+		}
+		return nil
+	})
+
+	r.Register(testpb.PROTOCOL_TYPE_SGetAttachment, msg.NewSGetAttachment, func(m *msg.SGetAttachment) error {
+		r.attachmentKey = m.Key
+		log.Printf("← SGetAttachment key=%d", m.Key)
 		return nil
 	})
 }
@@ -212,6 +258,14 @@ func (r *Robot) click(loginToken, reqToken string) (*response, error) {
 	return r.send(m, loginToken, reqToken)
 }
 
+func (r *Robot) heartbeat() (*response, error) {
+	return r.send(msg.NewHeartbeat(), r.loginToken, r.reqToken)
+}
+
+func (r *Robot) pollEvents() (*response, error) {
+	return r.send(msg.NewPollEvents(), r.loginToken, r.reqToken)
+}
+
 func step(name string) {
 	log.Printf("== %s", name)
 }
@@ -224,7 +278,70 @@ func (r *Robot) Run() error {
 	login0, req0, refresh0 := r.loginToken, r.reqToken, r.refreshToken
 	log.Printf("   loginToken=%s reqToken=%s refreshToken=%s", login0, req0, refresh0)
 
-	step("2. 用户协议：带 loginToken + requestToken")
+	step("2. 心跳：auth-only，不轮换 requestToken")
+	reqBeforeHeartbeat := r.reqToken
+	hbResp, err := r.heartbeat()
+	if err != nil {
+		return err
+	}
+	if hbResp.status != http.StatusOK {
+		return fmt.Errorf("heartbeat failed: HTTP %d %s: %s", hbResp.status, hbResp.errCode, hbResp.body)
+	}
+	if hbResp.reqToken != "" {
+		return fmt.Errorf("心跳不应下发新 requestToken，got %q", hbResp.reqToken)
+	}
+	if r.reqToken != reqBeforeHeartbeat {
+		return fmt.Errorf("心跳改动了 requestToken: %q -> %q", reqBeforeHeartbeat, r.reqToken)
+	}
+	log.Printf("   心跳 ok，requestToken 未变: %s", r.reqToken)
+
+	step("3. PollEvents：按事件类型比较版本号")
+	reqBeforePoll := r.reqToken
+	beforeVersions := maps.Clone(r.eventVersions)
+	pollResp, err := r.pollEvents()
+	if err != nil {
+		return err
+	}
+	if pollResp.status != http.StatusOK {
+		return fmt.Errorf("poll events failed: HTTP %d %s: %s", pollResp.status, pollResp.errCode, pollResp.body)
+	}
+	if pollResp.reqToken != "" {
+		return fmt.Errorf("PollEvents 不应下发新 requestToken，got %q", pollResp.reqToken)
+	}
+	if r.reqToken != reqBeforePoll {
+		return fmt.Errorf("PollEvents 改动了 requestToken: %q -> %q", reqBeforePoll, r.reqToken)
+	}
+	if !r.eventVersionsReceived {
+		return fmt.Errorf("PollEvents 没有返回 EventVersions")
+	}
+	afterVersions := r.eventVersions
+	mailBefore, mailAfter := beforeVersions[event.EventTypeMailNew], afterVersions[event.EventTypeMailNew]
+	// 全服事件看 global，定向事件看 user；任一增加都说明 mail 需要同步。
+	if r.expectEvent && mailAfter.global <= mailBefore.global && mailAfter.user <= mailBefore.user {
+		return fmt.Errorf("期望 mail 版本增加，before=%v after=%v", mailBefore, mailAfter)
+	}
+	log.Printf("   版本: %v（mail %v -> %v）", afterVersions, mailBefore, mailAfter)
+
+	// 再拉一次：没有新的变化，版本应该完全一致。
+	secondBefore := maps.Clone(r.eventVersions)
+	dupResp, err := r.pollEvents()
+	if err != nil {
+		return err
+	}
+	if dupResp.status != http.StatusOK {
+		return fmt.Errorf("second poll failed: HTTP %d %s: %s", dupResp.status, dupResp.errCode, dupResp.body)
+	}
+	// 共享环境里两次 poll 之间可能真的有新事件，不能要求 map 完全相等；
+	// 只要求版本不回退（回退说明服务端重置，需要全量同步）。
+	for typ, before := range secondBefore {
+		after := r.eventVersions[typ]
+		if after.global < before.global || after.user < before.user {
+			return fmt.Errorf("第二次拉取版本回退: type=%d before=%v after=%v", typ, before, after)
+		}
+	}
+	log.Printf("   第二次拉取版本未回退: %v -> %v", secondBefore, r.eventVersions)
+
+	step("4. 用户协议：带 loginToken + requestToken")
 	resp, err := r.click(login0, req0)
 	if err != nil {
 		return err
@@ -238,7 +355,7 @@ func (r *Robot) Run() error {
 	req1 := resp.reqToken
 	log.Printf("   requestToken 轮换: %s -> %s", req0, req1)
 
-	step("3. 重放旧 requestToken，应该被拒绝")
+	step("5. 重放旧 requestToken，应该被拒绝")
 	replay, err := r.click(login0, req0)
 	if err != nil {
 		return err
@@ -246,12 +363,12 @@ func (r *Robot) Run() error {
 	if replay.status == http.StatusOK {
 		return fmt.Errorf("旧 requestToken 重放居然成功了")
 	}
-	if replay.errCode != "REQ_TOKEN_STALE" {
-		return fmt.Errorf("重放返回 %d %s，want 401 REQ_TOKEN_STALE", replay.status, replay.errCode)
+	if replay.errCode != "REQ_DUP" {
+		return fmt.Errorf("重放返回 %d %s，want 409 REQ_DUP", replay.status, replay.errCode)
 	}
-	log.Printf("   拒绝: HTTP %d %s", replay.status, replay.errCode)
+	log.Printf("   拒绝: HTTP %d %s（Redis 快速去重）", replay.status, replay.errCode)
 
-	step("4. 用轮换后的 requestToken 继续")
+	step("6. 用轮换后的 requestToken 继续")
 	resp, err = r.click(login0, req1)
 	if err != nil {
 		return err
@@ -265,7 +382,101 @@ func (r *Robot) Run() error {
 	req2 := resp.reqToken
 	log.Printf("   requestToken 再次轮换: %s -> %s", req1, req2)
 
-	step("5. 免登录：用 refreshToken 换一套新 token")
+	step("7. CMails：拉取邮件并领取第一封")
+	req3 := req2
+	syncResp, err := r.send(msg.NewCMails(), login0, req3)
+	if err != nil {
+		return err
+	}
+	if syncResp.status != http.StatusOK {
+		return fmt.Errorf("sync mail failed: HTTP %d %s: %s", syncResp.status, syncResp.errCode, syncResp.body)
+	}
+	if syncResp.reqToken == "" || syncResp.reqToken == req3 {
+		return fmt.Errorf("CMails 没有轮换 requestToken: old=%q new=%q", req3, syncResp.reqToken)
+	}
+	log.Printf("   CMails 轮换: %s -> %s，邮件数 %d", req3, syncResp.reqToken, len(r.mailList))
+	req3 = syncResp.reqToken
+	if r.expectMail && len(r.mailList) == 0 {
+		return fmt.Errorf("期望有邮件，实际 SMails 为空")
+	}
+
+	if len(r.mailList) > 0 {
+		first := r.mailList[0]
+
+		// CReadMail 没有响应包，只能靠下一次同步确认状态。
+		read := msg.NewCReadMail()
+		read.Key = first.Key
+		readResp, err := r.send(read, login0, req3)
+		if err != nil {
+			return err
+		}
+		if readResp.status != http.StatusOK {
+			return fmt.Errorf("read mail failed: HTTP %d %s: %s", readResp.status, readResp.errCode, readResp.body)
+		}
+		if readResp.reqToken == "" || readResp.reqToken == req3 {
+			return fmt.Errorf("CReadMail 没有轮换 requestToken: old=%q new=%q", req3, readResp.reqToken)
+		}
+		req3 = readResp.reqToken
+
+		syncResp, err = r.send(msg.NewCMails(), login0, req3)
+		if err != nil {
+			return err
+		}
+		if syncResp.status != http.StatusOK {
+			return fmt.Errorf("sync after read failed: HTTP %d %s: %s", syncResp.status, syncResp.errCode, syncResp.body)
+		}
+		req3 = syncResp.reqToken
+		stateAfterRead := int32(0)
+		for _, mail := range r.mailList {
+			if mail.Key == first.Key {
+				stateAfterRead = mail.State
+				break
+			}
+		}
+		// 有附件是 3，无附件（或之前已领取）是 1。
+		if stateAfterRead != 1 && stateAfterRead != 3 {
+			return fmt.Errorf("读取后 mail %d 状态是 %d，want 1/3", first.Key, stateAfterRead)
+		}
+
+		claim := msg.NewCGetAttachment()
+		claim.Key = first.Key
+		claimResp, err := r.send(claim, login0, req3)
+		if err != nil {
+			return err
+		}
+		if claimResp.status != http.StatusOK {
+			return fmt.Errorf("get attachment failed: HTTP %d %s: %s", claimResp.status, claimResp.errCode, claimResp.body)
+		}
+		if claimResp.reqToken == "" || claimResp.reqToken == req3 {
+			return fmt.Errorf("CGetAttachment 没有轮换 requestToken: old=%q new=%q", req3, claimResp.reqToken)
+		}
+		req3 = claimResp.reqToken
+		if r.attachmentKey != first.Key {
+			return fmt.Errorf("领取结果 key=%d，want %d", r.attachmentKey, first.Key)
+		}
+
+		// 再同步一次，确认领取状态已经落库。
+		syncResp, err = r.send(msg.NewCMails(), login0, req3)
+		if err != nil {
+			return err
+		}
+		if syncResp.status != http.StatusOK {
+			return fmt.Errorf("re-sync mail failed: HTTP %d %s: %s", syncResp.status, syncResp.errCode, syncResp.body)
+		}
+		req3 = syncResp.reqToken
+		found := false
+		for _, mail := range r.mailList {
+			if mail.Key == first.Key && mail.State == 1 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("重新同步后 mail %d 不是已领取状态", first.Key)
+		}
+	}
+
+	step("8. 免登录：用 refreshToken 换一套新 token")
 	r.refreshToken = refresh0
 	if err := r.loginAuto(); err != nil {
 		return err
@@ -273,7 +484,7 @@ func (r *Robot) Run() error {
 	login1, req3, refresh1 := r.loginToken, r.reqToken, r.refreshToken
 	log.Printf("   新 loginToken=%s reqToken=%s refreshToken=%s", login1, req3, refresh1)
 
-	step("6. 旧 loginToken 已被顶号")
+	step("9. 旧 loginToken 已被顶号")
 	kicked, err := r.click(login0, req3)
 	if err != nil {
 		return err
@@ -291,6 +502,8 @@ func main() {
 	addr := flag.String("addr", "http://127.0.0.1:8080", "server address")
 	account := flag.String("account", "", "test account; empty = random")
 	deviceID := flag.String("device", "robot-device", "device id")
+	expectEvent := flag.Bool("expect-event", false, "require at least one event in the first PollEvents")
+	expectMail := flag.Bool("expect-mail", false, "require at least one mail in CMails")
 	flag.Parse()
 
 	if *account == "" {
@@ -298,7 +511,10 @@ func main() {
 	}
 
 	log.Printf("robot account=%s device=%s addr=%s", *account, *deviceID, *addr)
-	if err := NewRobot(*addr, *account, *deviceID).Run(); err != nil {
+	robot := NewRobot(*addr, *account, *deviceID)
+	robot.expectEvent = *expectEvent
+	robot.expectMail = *expectMail
+	if err := robot.Run(); err != nil {
 		log.Printf("robot failed: %v", err)
 		os.Exit(1)
 	}

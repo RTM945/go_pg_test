@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+option go_package = "go_pg_test/genpb/test;testpb";
+
+import "ext.proto";
+
+// 客户端主动拉取各子系统的版本号。
+// 客户端本地保存一份 map，比较后只同步发生变化的类型。
+message PollEvents {
+  option (proto.type_id) = 105;
+}
+
+// 每个事件类型两级版本：
+//   global 全服变化（全服 GM 邮件、活动开启）
+//   user   只针对当前用户的变化（定向 GM 邮件）
+// 任一变大，客户端就同步对应类型。
+message EventVersion {
+  int64 global = 1;
+  int64 user = 2;
+}
+
+// key 是事件类型 id。已知类型：1=MAIL_NEW、2=ACTIVITY_START；
+// 新增类型只需在业务层加常量，协议和表结构都不用动。
+message EventVersions {
+  option (proto.type_id) = 106;
+
+  map<int32, EventVersion> versions = 1;
+}

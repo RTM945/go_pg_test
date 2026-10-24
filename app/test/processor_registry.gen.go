@@ -4,6 +4,7 @@
 package main
 
 import (
+	"go_pg_test/app/test/logic/mail"
 	"go_pg_test/app/test/logic/red_envelope"
 	"go_pg_test/app/test/msg"
 
@@ -11,6 +12,9 @@ import (
 )
 
 func init() {
+	register(processRegistry, testpb.PROTOCOL_TYPE_CMails, msg.NewCMails, mail.ProcessCMails, processUserTryLock)
+	register(processRegistry, testpb.PROTOCOL_TYPE_CReadMail, msg.NewCReadMail, mail.ProcessCReadMail, processUserTryLock)
+	register(processRegistry, testpb.PROTOCOL_TYPE_CGetAttachment, msg.NewCGetAttachment, mail.ProcessCGetAttachment, processUserTryLock)
 	register(processRegistry, testpb.PROTOCOL_TYPE_CRedEnvelope, msg.NewCRedEnvelope, red_envelope.ProcessCRedEnvelope, processUserTryLock)
 	register(processRegistry, testpb.PROTOCOL_TYPE_CRedEnvelopeClick, msg.NewCRedEnvelopeClick, red_envelope.ProcessCRedEnvelopeClick, processUserTryLock)
 }

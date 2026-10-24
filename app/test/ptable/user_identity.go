@@ -203,7 +203,7 @@ func (o *UserIdentity) Identity() int64 {
 	return o.id
 }
 
-const selectColumnsUserIdentity = "id, platform, platform_uid, uid, created_at"
+const selectColumnsUserIdentity = "\"id\", \"platform\", \"platform_uid\", \"uid\", \"created_at\""
 
 func scanUserIdentity(s dbctx.Scanner) (*UserIdentity, error) {
 	var (
@@ -238,7 +238,7 @@ func (o userIdentity) getId(
 ) *UserIdentity {
 	const query = "SELECT " + selectColumnsUserIdentity +
 		" FROM \"user_identity\"" +
-		" WHERE id = $1"
+		" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserIdentity, id)
 }
 
@@ -277,7 +277,7 @@ func (o userIdentity) listUid(
 ) []*UserIdentity {
 	const query = "SELECT " + selectColumnsUserIdentity +
 		" FROM \"user_identity\"" +
-		" WHERE uid = $1"
+		" WHERE \"uid\" = $1"
 	return dbctx.QueryList(ctx, q, query, scanUserIdentity, uid)
 }
 
@@ -310,7 +310,7 @@ func (o userIdentity) getPlatformPlatformUID(
 ) *UserIdentity {
 	const query = "SELECT " + selectColumnsUserIdentity +
 		" FROM \"user_identity\"" +
-		" WHERE platform = $1 AND platform_uid = $2"
+		" WHERE \"platform\" = $1 AND \"platform_uid\" = $2"
 	return dbctx.QueryOne(ctx, q, query, scanUserIdentity, platform, platformUID)
 }
 
@@ -382,7 +382,7 @@ func (v *UserIdentity) FlushStmt() (string, []any) {
 		return "", nil
 	}
 	if v.deleted {
-		return "DELETE FROM \"user_identity\" WHERE id = $1", []any{v.id}
+		return "DELETE FROM \"user_identity\" WHERE \"id\" = $1", []any{v.id}
 	}
 	if v.dirty == 0 {
 		return "", nil
@@ -395,7 +395,7 @@ func (v *UserIdentity) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.platform)
-		sb.WriteString("platform = $")
+		sb.WriteString("\"platform\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserIdentityPlatformUID != 0 {
@@ -403,7 +403,7 @@ func (v *UserIdentity) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.platformUID)
-		sb.WriteString("platform_uid = $")
+		sb.WriteString("\"platform_uid\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserIdentityUid != 0 {
@@ -411,7 +411,7 @@ func (v *UserIdentity) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.uid)
-		sb.WriteString("uid = $")
+		sb.WriteString("\"uid\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if v.dirty&dirtyUserIdentityCreatedAt != 0 {
@@ -419,11 +419,11 @@ func (v *UserIdentity) FlushStmt() (string, []any) {
 			sb.WriteString(", ")
 		}
 		args = append(args, v.createdAt)
-		sb.WriteString("created_at = $")
+		sb.WriteString("\"created_at\" = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	args = append(args, v.id)
-	sb.WriteString(" WHERE id = $")
+	sb.WriteString(" WHERE \"id\" = $")
 	sb.WriteString(strconv.Itoa(len(args)))
 	return sb.String(), args
 }
@@ -473,9 +473,9 @@ func (o userIdentity) Insert(
 	dbctx.RegisterNew(ctx, v)
 	tx := dbctx.SQLTxFromCtx(ctx)
 	const query = "INSERT INTO \"user_identity\" " +
-		"(platform, platform_uid, uid, created_at) " +
+		"(\"platform\", \"platform_uid\", \"uid\", \"created_at\") " +
 		"VALUES ($1, $2, $3, $4)" +
-		" RETURNING id"
+		" RETURNING \"id\""
 
 	row := tx.QueryRow(
 		ctx,

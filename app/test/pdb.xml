@@ -82,10 +82,12 @@
     <table name="user_mail" bean="Mail">
         <primaryKey variable="id" autoIncrement="true"/>
         <index variable="uid,confId" unique="false"/>
+        <index variable="uid" unique="false"/> 拉取某个玩家的全部邮件
     </table>
 
     <bean name="GMMail">
         <variable name="id" type="int64"/> 自增
+        <variable name="uuid" type="string"/> GM平台幂等键，所有服收到同一条通知时用同一个值
         <variable name="params" type="string"/> json
         <variable name="awardList" type="string"/> json
         <variable name="startAt" type="int64"/> 开始时间
@@ -95,8 +97,9 @@
         <variable name="condition" type="string"/> 条件 应该需要脚本引擎执行
     </bean>
 
-    <table name="user_gm_mail" bean="GMMail">
+    <table name="gm_mail" bean="GMMail">
         <primaryKey variable="id" autoIncrement="true"/>
+        <index variable="uuid" unique="true"/>
     </table>
 </pdb>
 
