@@ -204,13 +204,7 @@ func (r *Robot) send(m gopgio.Msg, loginToken, reqToken string) (*response, erro
 }
 
 func (r *Robot) loginSDK() error {
-	login := msg.NewLogin()
-	login.Plat = "test"
-	login.Account = r.account
-	login.ClientVersion = "robot"
-	login.Ext = map[int32]string{extUDID: r.deviceID}
-
-	resp, err := r.send(login, "", "")
+	resp, err := r.sendLogin(r.account, map[int32]string{extUDID: r.deviceID})
 	if err != nil {
 		return err
 	}
@@ -227,15 +221,10 @@ func (r *Robot) loginSDK() error {
 	return nil
 }
 
+// loginAuto 免登录只带 refreshToken 和设备号，不带 account：服务端只凭 refreshToken 找人。
 func (r *Robot) loginAuto() error {
-	login := msg.NewLogin()
-	login.Plat = "test"
-	login.Account = r.account
-	login.ClientVersion = "robot"
-	login.Ext = map[int32]string{extUDID: r.deviceID, extToken: r.refreshToken}
-
 	oldRefresh := r.refreshToken
-	resp, err := r.send(login, "", "")
+	resp, err := r.sendLogin("", map[int32]string{extUDID: r.deviceID, extToken: r.refreshToken})
 	if err != nil {
 		return err
 	}
@@ -249,6 +238,30 @@ func (r *Robot) loginAuto() error {
 		return fmt.Errorf("auto login did not rotate refreshToken")
 	}
 	r.loginToken, r.reqToken = resp.loginToken, resp.reqToken
+	return nil
+}
+
+// sendLogin 发一个登录，原样返回响应（不管成败）。
+// 带 account 是 SDK 登录，ext 里带 extToken 是免登录，服务端要求恰好带一个。
+func (r *Robot) sendLogin(account string, ext map[int32]string) (*response, error) {
+	login := msg.NewLogin()
+	login.Plat = "test"
+	login.Account = account
+	login.ClientVersion = "robot"
+	login.Ext = ext
+	return r.send(login, "", "")
+}
+
+// expectLoginRejected 发一个应该被拒绝的登录，检查状态码和错误码。
+func (r *Robot) expectLoginRejected(account string, ext map[int32]string, status int, code string) error {
+	resp, err := r.sendLogin(account, ext)
+	if err != nil {
+		return err
+	}
+	if resp.status != status || resp.errCode != code {
+		return fmt.Errorf("登录返回 %d %s，want %d %s", resp.status, resp.errCode, status, code)
+	}
+	log.Printf("   拒绝: HTTP %d %s", resp.status, resp.errCode)
 	return nil
 }
 
@@ -444,39 +457,57 @@ func (r *Robot) Run() error {
 		if err != nil {
 			return err
 		}
-		if claimResp.status != http.StatusOK {
-			return fmt.Errorf("get attachment failed: HTTP %d %s: %s", claimResp.status, claimResp.errCode, claimResp.body)
-		}
-		if claimResp.reqToken == "" || claimResp.reqToken == req3 {
-			return fmt.Errorf("CGetAttachment 没有轮换 requestToken: old=%q new=%q", req3, claimResp.reqToken)
-		}
-		req3 = claimResp.reqToken
-		if r.attachmentKey != first.Key {
-			return fmt.Errorf("领取结果 key=%d，want %d", r.attachmentKey, first.Key)
-		}
-
-		// 再同步一次，确认领取状态已经落库。
-		syncResp, err = r.send(msg.NewCMails(), login0, req3)
-		if err != nil {
-			return err
-		}
-		if syncResp.status != http.StatusOK {
-			return fmt.Errorf("re-sync mail failed: HTTP %d %s: %s", syncResp.status, syncResp.errCode, syncResp.body)
-		}
-		req3 = syncResp.reqToken
-		found := false
-		for _, mail := range r.mailList {
-			if mail.Key == first.Key && mail.State == 1 {
-				found = true
-				break
+		if stateAfterRead == 1 {
+			// 没有附件（或者之前已经领过）：领取被拒绝，事务回滚，requestToken 不轮换
+			if claimResp.status != http.StatusConflict || (claimResp.errCode != "NO_ATTACHMENT" && claimResp.errCode != "ATTACHMENT_CLAIMED") {
+				return fmt.Errorf("没有可领附件的邮件领取返回 %d %s，want 409 NO_ATTACHMENT / ATTACHMENT_CLAIMED", claimResp.status, claimResp.errCode)
 			}
-		}
-		if !found {
-			return fmt.Errorf("重新同步后 mail %d 不是已领取状态", first.Key)
+			log.Printf("   没有可领的附件，拒绝: HTTP %d %s", claimResp.status, claimResp.errCode)
+		} else {
+			if claimResp.status != http.StatusOK {
+				return fmt.Errorf("get attachment failed: HTTP %d %s: %s", claimResp.status, claimResp.errCode, claimResp.body)
+			}
+			if claimResp.reqToken == "" || claimResp.reqToken == req3 {
+				return fmt.Errorf("CGetAttachment 没有轮换 requestToken: old=%q new=%q", req3, claimResp.reqToken)
+			}
+			req3 = claimResp.reqToken
+			if r.attachmentKey != first.Key {
+				return fmt.Errorf("领取结果 key=%d，want %d", r.attachmentKey, first.Key)
+			}
+
+			// 附件只能领一次
+			again, err := r.send(claim, login0, req3)
+			if err != nil {
+				return err
+			}
+			if again.status != http.StatusConflict || again.errCode != "ATTACHMENT_CLAIMED" {
+				return fmt.Errorf("重复领取返回 %d %s，want 409 ATTACHMENT_CLAIMED", again.status, again.errCode)
+			}
+			log.Printf("   重复领取，拒绝: HTTP %d %s", again.status, again.errCode)
+
+			// 再同步一次，确认领取状态已经落库。
+			syncResp, err = r.send(msg.NewCMails(), login0, req3)
+			if err != nil {
+				return err
+			}
+			if syncResp.status != http.StatusOK {
+				return fmt.Errorf("re-sync mail failed: HTTP %d %s: %s", syncResp.status, syncResp.errCode, syncResp.body)
+			}
+			req3 = syncResp.reqToken
+			found := false
+			for _, mail := range r.mailList {
+				if mail.Key == first.Key && mail.State == 1 {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("重新同步后 mail %d 不是已领取状态", first.Key)
+			}
 		}
 	}
 
-	step("8. 免登录：用 refreshToken 换一套新 token")
+	step("8. 免登录：只带 refreshToken，换一套新 token")
 	r.refreshToken = refresh0
 	if err := r.loginAuto(); err != nil {
 		return err
@@ -484,7 +515,36 @@ func (r *Robot) Run() error {
 	login1, req3, refresh1 := r.loginToken, r.reqToken, r.refreshToken
 	log.Printf("   新 loginToken=%s reqToken=%s refreshToken=%s", login1, req3, refresh1)
 
-	step("9. 旧 loginToken 已被顶号")
+	step("9. 上一次的响应丢了：宽限期内用旧 refreshToken 还能免登录")
+	r.refreshToken = refresh0
+	if err := r.loginAuto(); err != nil {
+		return err
+	}
+	log.Printf("   旧 refreshToken 在宽限期内可用，换了一套新的 loginToken=%s refreshToken=%s", r.loginToken, r.refreshToken)
+
+	step("10. 伪造的 refreshToken：401 TOKEN_INVALID，客户端回到 SDK 登录")
+	if err := r.expectLoginRejected("", map[int32]string{extUDID: r.deviceID, extToken: "forged-" + refresh1},
+		http.StatusUnauthorized, "TOKEN_INVALID"); err != nil {
+		return err
+	}
+
+	step("11. 换一台设备拿当前的 refreshToken：401 TOKEN_INVALID，token 只属于拿到它的那台设备")
+	if err := r.expectLoginRejected("", map[int32]string{extUDID: "other-" + r.deviceID, extToken: r.refreshToken},
+		http.StatusUnauthorized, "TOKEN_INVALID"); err != nil {
+		return err
+	}
+
+	step("12. 登录参数不合法：400 BAD_PAYLOAD")
+	if err := r.expectLoginRejected(r.account, map[int32]string{extUDID: strings.Repeat("d", 200)},
+		http.StatusBadRequest, "BAD_PAYLOAD"); err != nil {
+		return fmt.Errorf("设备号超长: %w", err)
+	}
+	if err := r.expectLoginRejected(r.account, map[int32]string{extUDID: r.deviceID, extToken: r.refreshToken},
+		http.StatusBadRequest, "BAD_PAYLOAD"); err != nil {
+		return fmt.Errorf("account 和 refreshToken 都带: %w", err)
+	}
+
+	step("13. 旧 loginToken 已被顶号")
 	kicked, err := r.click(login0, req3)
 	if err != nil {
 		return err

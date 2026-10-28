@@ -4,6 +4,9 @@
 package msg
 
 import (
+	"log/slog"
+
+	"go_pg_test/common/logging"
 	"go_pg_test/io"
 
 	testpb "go_pg_test/genpb/test"
@@ -49,6 +52,11 @@ func (m *PollEvents) Write(buffer []byte) (int, error) {
 	return m.PollEvents.MarshalToVT(buffer)
 }
 
+// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
+func (m *PollEvents) LogValue() slog.Value {
+	return logging.ProtoValue(m.PollEvents)
+}
+
 // EventVersions 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
 // 不用为每个协议再写一遍字段访问器。
 type EventVersions struct {
@@ -87,4 +95,9 @@ func (m *EventVersions) Read(buffer []byte) error {
 
 func (m *EventVersions) Write(buffer []byte) (int, error) {
 	return m.EventVersions.MarshalToVT(buffer)
+}
+
+// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
+func (m *EventVersions) LogValue() slog.Value {
+	return logging.ProtoValue(m.EventVersions)
 }

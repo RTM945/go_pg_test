@@ -30,6 +30,14 @@ var file_ext_proto_extTypes = []protoimpl.ExtensionInfo{
 		Tag:           "varint,51234,opt,name=type_id",
 		Filename:      "ext.proto",
 	},
+	{
+		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+		ExtensionType: (*bool)(nil),
+		Field:         51235,
+		Name:          "proto.sensitive",
+		Tag:           "varint,51235,opt,name=sensitive",
+		Filename:      "ext.proto",
+	},
 }
 
 // Extension fields to descriptorpb.MessageOptions.
@@ -38,22 +46,31 @@ var (
 	E_TypeId = &file_ext_proto_extTypes[0]
 )
 
+// Extension fields to descriptorpb.FieldOptions.
+var (
+	// optional bool sensitive = 51235;
+	E_Sensitive = &file_ext_proto_extTypes[1]
+)
+
 var File_ext_proto protoreflect.FileDescriptor
 
 const file_ext_proto_rawDesc = "" +
 	"\n" +
 	"\text.proto\x12\x05proto\x1a google/protobuf/descriptor.proto::\n" +
-	"\atype_id\x12\x1f.google.protobuf.MessageOptions\x18\xa2\x90\x03 \x01(\x05R\x06typeIdB\"Z go_pg_test/genpb/common;commonpbb\x06proto3"
+	"\atype_id\x12\x1f.google.protobuf.MessageOptions\x18\xa2\x90\x03 \x01(\x05R\x06typeId:=\n" +
+	"\tsensitive\x12\x1d.google.protobuf.FieldOptions\x18\xa3\x90\x03 \x01(\bR\tsensitiveB\"Z go_pg_test/genpb/common;commonpbb\x06proto3"
 
 var file_ext_proto_goTypes = []any{
 	(*descriptorpb.MessageOptions)(nil), // 0: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),   // 1: google.protobuf.FieldOptions
 }
 var file_ext_proto_depIdxs = []int32{
 	0, // 0: proto.type_id:extendee -> google.protobuf.MessageOptions
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	0, // [0:1] is the sub-list for extension extendee
+	1, // 1: proto.sensitive:extendee -> google.protobuf.FieldOptions
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	0, // [0:2] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
@@ -69,7 +86,7 @@ func file_ext_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ext_proto_rawDesc), len(file_ext_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   0,
-			NumExtensions: 1,
+			NumExtensions: 2,
 			NumServices:   0,
 		},
 		GoTypes:           file_ext_proto_goTypes,

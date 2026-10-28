@@ -11,6 +11,7 @@ import (
 
 	"go_pg_test/app/test/msg"
 	"go_pg_test/app/test/ptable"
+	"go_pg_test/common/dispatch"
 	testpb "go_pg_test/genpb/test"
 )
 
@@ -21,7 +22,11 @@ const (
 	MailStateReadNotReceived int32 = 3 // 已读，附件未领取
 )
 
-var ErrMailNotFound = errors.New("mail not found")
+var (
+	ErrMailNotFound      = dispatch.NewClientError(dispatch.NotFound, "MAIL_NOT_FOUND", "mail not found")
+	ErrNoAttachment      = dispatch.NewClientError(dispatch.Conflict, "NO_ATTACHMENT", "mail has no attachment")
+	ErrAttachmentClaimed = dispatch.NewClientError(dispatch.Conflict, "ATTACHMENT_CLAIMED", "attachment already claimed")
+)
 
 // processMails 返回当前玩家的邮件。全服 GM 邮件在这里懒投递：
 // 只有玩家主动同步时，才把当前生效的 gm_mail 复制到自己的 user_mail。
@@ -83,11 +88,26 @@ func processGetAttachment(ctx context.Context, req *msg.CGetAttachment) error {
 	if m == nil || m.Uid() != uid {
 		return ErrMailNotFound
 	}
+	if err := checkClaimable(m.State(), m.AwardList()); err != nil {
+		return err
+	}
 	m.SetState(MailStateRead)
 
 	resp := msg.NewSGetAttachment()
 	resp.Key = m.Id()
 	return req.Session().Write(resp)
+}
+
+// checkClaimable 附件只能领一次，而且得真有附件——接上发奖逻辑之后，重复领取就是重复发奖。
+// 领过的邮件状态是 MailStateRead；没读就直接领也可以。
+func checkClaimable(state int32, awardList string) error {
+	switch {
+	case !hasAttachment(awardList):
+		return ErrNoAttachment
+	case state == MailStateRead:
+		return ErrAttachmentClaimed
+	}
+	return nil
 }
 
 func hasAttachment(awardList string) bool {

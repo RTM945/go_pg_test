@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -68,4 +69,34 @@ func TestDispatchUnknownTypeId(t *testing.T) {
 	if !errors.Is(err, ErrUnknownTypeId) {
 		t.Errorf("Dispatch() error = %v, want ErrUnknownTypeId", err)
 	}
+}
+
+// TestRegisterTwicePanics 同一个协议号登记两次直接 panic，不让后登记的悄悄覆盖。
+func TestRegisterTwicePanics(t *testing.T) {
+	reg := NewProcessorRegistry()
+	noop := func(context.Context, int32, []byte, io.Session) error { return nil }
+	reg.Register(101, noop)
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("重复登记应该 panic")
+		}
+	}()
+	reg.Register(101, noop)
+}
+
+// TestClientErrorContract ClientError 包在别的错误里也能取出来；类别不合法启动就 panic。
+func TestClientErrorContract(t *testing.T) {
+	err := fmt.Errorf("%w: typeId 7", ErrMalformedPayload)
+	ce, ok := errors.AsType[*ClientError](err)
+	if !ok || ce.Kind != BadRequest || ce.Code != "BAD_PAYLOAD" {
+		t.Fatalf("应该取出 BAD_PAYLOAD，实际 %v %v", ce, ok)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("非法类别应该 panic")
+		}
+	}()
+	NewClientError(Kind(0), "X", "x")
 }

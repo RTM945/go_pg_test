@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"go_pg_test/app/test/ptable"
@@ -16,10 +15,11 @@ import (
 )
 
 var (
-	// ErrStaleRequestToken 客户端带来的 requestToken 和数据库里的不一致。
-	ErrStaleRequestToken = errors.New("stale request token")
-	// ErrDuplicateRequest Redis 快速去重判定这个 token 已经在处理/处理过了。
-	ErrDuplicateRequest = errors.New("duplicate request")
+	// ErrStaleRequestToken 客户端带来的 requestToken 和数据库里的不一致：上一次成功响应可能丢了。
+	// 客户端不要重放原请求，应静默免登录并重新同步状态。
+	ErrStaleRequestToken = dispatch.NewClientError(dispatch.Unauthorized, "REQ_TOKEN_STALE", "request token is stale")
+	// ErrDuplicateRequest Redis 快速去重判定这个 token 已经在处理/处理过了。处理方式同上。
+	ErrDuplicateRequest = dispatch.NewClientError(dispatch.Conflict, "REQ_DUP", "duplicate request")
 )
 
 var processRegistry = dispatch.NewProcessorRegistry()
@@ -30,17 +30,16 @@ var processModes = map[int32]processMode{}
 type processMode int
 
 const (
-	processQuery processMode = iota
-	processUserTryLock
-	processUserLock
-	processNamedTryLock
-	processNamedLock
-	processAuthOnly // 只验 loginToken（顺带续 Redis TTL），不开事务、不消费 requestToken
-	processNone     // 不认证、不开事务，handler 自己管理
+	processQuery       processMode = iota // 认证 + 只读，dbpool.Query
+	processUserTryLock                    // 认证 + uid try 锁事务 + requestToken 链（玩家请求）
+	processUserLock                       // 认证 + uid 阻塞锁事务 + requestToken 链
+	processAuthOnly                       // 只验 loginToken（顺带续 Redis TTL），不开事务、不消费 requestToken
+	processNone                           // 不认证、不开事务，逻辑自己管理（登录）
 )
 
 // register 把“反序列化 + 事务/锁 + requestToken 链”包进一个 DispatchFunc，
 // 再登记进纯分发的 ProcessorRegistry。生成器只负责调用这个函数。
+// 同一个协议号登记两次、或者模式不认识，启动时直接 panic。
 func register[T io.Msg](
 	reg *dispatch.ProcessorRegistry,
 	typeId int32,
@@ -48,9 +47,11 @@ func register[T io.Msg](
 	fn func(ctx context.Context, req T) error,
 	mode processMode,
 ) {
-	processModes[typeId] = mode
+	if mode < processQuery || mode > processNone {
+		panic(fmt.Sprintf("register typeId %d: unknown process mode %d", typeId, mode))
+	}
 
-	reg.Register(typeId, func(_ context.Context, typeId int32, buffer []byte, s io.Session) error {
+	reg.Register(typeId, func(ctx context.Context, typeId int32, buffer []byte, s io.Session) error {
 		msg := newMsg()
 		if err := msg.Read(buffer); err != nil {
 			return fmt.Errorf("%w: typeId %d: %w", dispatch.ErrMalformedPayload, typeId, err)
@@ -62,8 +63,7 @@ func register[T io.Msg](
 			return fn(ctx, msg)
 		}
 
-		// db!
-		ctx := context.Background()
+		// ctx 是请求的 ctx：客户端断开时还没提交的事务直接回滚（COMMIT 本身不受影响）。
 		switch mode {
 		case processQuery:
 			return dbpool.Query(ctx, process)
@@ -71,16 +71,11 @@ func register[T io.Msg](
 			return runUserWithRequestToken(ctx, s, db.WithUserTryLock, process)
 		case processUserLock:
 			return runUserWithRequestToken(ctx, s, db.WithUserLock, process)
-		case processAuthOnly:
-			// 认证已经在 handler 里做完了，这里只跑逻辑。
+		default: // processAuthOnly 的认证已经在 handler 里做完；processNone 不认证
 			return process(ctx)
-		case processNone:
-			return process(ctx)
-		default:
-			// todo processNamedTryLock 和 processNamedLock 基本用不到
-			return fmt.Errorf("unknown process mode %d for typeId %d", mode, typeId)
 		}
 	})
+	processModes[typeId] = mode
 }
 
 // runUserWithRequestToken 先用 Redis SETNX 做快速去重，再进 DB 事务做权威比对。

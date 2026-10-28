@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go_pg_test/common/token"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"go_pg_test/common/dispatch"
+	"go_pg_test/common/token"
 )
 
 // rdb 用你之前 Init 里的那个包级变量
@@ -24,10 +26,11 @@ const (
 )
 
 var (
-	ErrTokenExpired        = errors.New("login token expired")
-	ErrKicked              = errors.New("kicked by another device")
-	ErrRedisUnavailable    = errors.New("redis unavailable")
-	ErrInvalidRequestToken = errors.New("invalid request token")
+	ErrTokenExpired     = dispatch.NewClientError(dispatch.Unauthorized, "TOKEN_EXPIRED", "login token expired")
+	ErrKicked           = dispatch.NewClientError(dispatch.Unauthorized, "KICKED", "kicked by another device")
+	ErrRedisUnavailable = dispatch.NewClientError(dispatch.Unavailable, "BUSY", "redis unavailable") // 不能说成过期，否则会引发免登录风暴
+	// ErrInvalidRequestToken 请求没带 requestToken，或者长度不对。
+	ErrInvalidRequestToken = dispatch.NewClientError(dispatch.BadRequest, "REQ_TOKEN_INVALID", "invalid request token")
 )
 
 func unavailable(err error) error {
@@ -36,15 +39,12 @@ func unavailable(err error) error {
 
 // ---- key 集中在这里 ----
 
-func loginKey(token string) string {
-	//h := sha256.Sum256([]byte(token))
-	//return "login:" + hex.EncodeToString(h[:])
-	// 明文好查
-	return "login:" + token
-}
-func loginOfKey(uid int64) string { return "login_of:" + strconv.FormatInt(uid, 10) }
-func requestKey(uid int64, token string) string {
-	return "req:" + strconv.FormatInt(uid, 10) + ":" + token
+// loginKey 只放登录 token 的哈希。login_of:<uid> 的值就是这个 key，
+// 放明文的话，能读 Redis 的人就能拿它冒充任何在线玩家。
+func loginKey(loginToken string) string { return "login:" + token.Hash(loginToken) }
+func loginOfKey(uid int64) string       { return "login_of:" + strconv.FormatInt(uid, 10) }
+func requestKey(uid int64, reqToken string) string {
+	return "req:" + strconv.FormatInt(uid, 10) + ":" + reqToken
 }
 
 // ---- 登录 token ----
@@ -84,11 +84,11 @@ if v ~= ARGV[2] then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 return v
 `)
 
-func VerifyLoginToken(ctx context.Context, token string) (int64, error) {
-	if token == "" {
+func VerifyLoginToken(ctx context.Context, loginToken string) (int64, error) {
+	if loginToken == "" {
 		return 0, ErrTokenExpired
 	}
-	key := loginKey(token)
+	key := loginKey(loginToken)
 	v, err := verifyScript.Run(ctx, rdb, []string{key}, int(loginTTL.Seconds()), kicked).Text()
 	if errors.Is(err, redis.Nil) {
 		return 0, ErrTokenExpired

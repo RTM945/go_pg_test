@@ -4,11 +4,6 @@ package ptable
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"math/bits"
-	"strconv"
-	"strings"
 
 	"pdbgen/dbctx"
 )
@@ -16,6 +11,22 @@ import (
 var UserRefreshTokenTable userRefreshToken
 
 type userRefreshToken struct{}
+
+type UserRefreshToken struct {
+	id        int64
+	uid       int64
+	deviceId  string
+	token     string
+	prevToken string
+	rotatedAt int64
+	expiresAt int64
+	revokedAt int64
+
+	loaded   bool   // 对应数据库里的一行：查出来的，或者 Insert 过的
+	deleted  bool   // 标记了删除，提交前 flush 成 DELETE
+	detached bool   // 脱离了事务：SetXxx / Delete 会 panic
+	dirty    uint64 // 改过、还没落库的列，第 i 位对应 updateColumnsUserRefreshToken[i]
+}
 
 const (
 	dirtyUserRefreshTokenUid       uint64 = 1 << 0
@@ -27,597 +38,291 @@ const (
 	dirtyUserRefreshTokenRevokedAt uint64 = 1 << 6
 )
 
-type UserRefreshToken struct {
-	id            int64
-	uid           int64
-	deviceId      string
-	token         string
-	prevToken     string
-	rotatedAt     int64
-	expiresAt     int64
-	revokedAt     int64
-	loaded        bool
-	deleted       bool
-	origUid       int64
-	origDeviceId  string
-	origToken     string
-	origPrevToken string
-	origRotatedAt int64
-	origExpiresAt int64
-	origRevokedAt int64
-	dirty         uint64
+var updateColumnsUserRefreshToken = []string{
+	"\"uid\"",
+	"\"device_id\"",
+	"\"token\"",
+	"\"prev_token\"",
+	"\"rotated_at\"",
+	"\"expires_at\"",
+	"\"revoked_at\"",
 }
 
-type userRefreshTokenState struct {
-	id            int64
-	uid           int64
-	deviceId      string
-	token         string
-	prevToken     string
-	rotatedAt     int64
-	expiresAt     int64
-	revokedAt     int64
-	loaded        bool
-	deleted       bool
-	origUid       int64
-	origDeviceId  string
-	origToken     string
-	origPrevToken string
-	origRotatedAt int64
-	origExpiresAt int64
-	origRevokedAt int64
-	dirty         uint64
-}
+const selectColumnsUserRefreshToken = "\"id\", \"uid\", \"device_id\", \"token\", \"prev_token\", \"rotated_at\", \"expires_at\", \"revoked_at\""
 
 func NewUserRefreshToken() *UserRefreshToken {
 	return &UserRefreshToken{}
 }
 
-func loadedUserRefreshToken(
-	id int64,
-	uid int64,
-	deviceId string,
-	token string,
-	prevToken string,
-	rotatedAt int64,
-	expiresAt int64,
-	revokedAt int64,
-) *UserRefreshToken {
-	return &UserRefreshToken{
-		id:            id,
-		uid:           uid,
-		deviceId:      deviceId,
-		token:         token,
-		prevToken:     prevToken,
-		rotatedAt:     rotatedAt,
-		expiresAt:     expiresAt,
-		revokedAt:     revokedAt,
-		loaded:        true,
-		origUid:       uid,
-		origDeviceId:  deviceId,
-		origToken:     token,
-		origPrevToken: prevToken,
-		origRotatedAt: rotatedAt,
-		origExpiresAt: expiresAt,
-		origRevokedAt: revokedAt,
-	}
-}
-
 func (o *UserRefreshToken) Id() int64 {
 	return o.id
-}
-func (o *UserRefreshToken) SetUid(v int64) {
-	if o.uid == v {
-		return
-	}
-	o.uid = v
-	o.dirty |= dirtyUserRefreshTokenUid
 }
 
 func (o *UserRefreshToken) Uid() int64 {
 	return o.uid
 }
-func (o *UserRefreshToken) SetDeviceId(v string) {
-	if o.deviceId == v {
-		return
+
+func (o *UserRefreshToken) SetUid(v int64) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.deviceId = v
-	o.dirty |= dirtyUserRefreshTokenDeviceId
+	if o.uid != v {
+		o.uid = v
+		o.dirty |= dirtyUserRefreshTokenUid
+	}
 }
 
 func (o *UserRefreshToken) DeviceId() string {
 	return o.deviceId
 }
-func (o *UserRefreshToken) SetToken(v string) {
-	if o.token == v {
-		return
+
+func (o *UserRefreshToken) SetDeviceId(v string) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.token = v
-	o.dirty |= dirtyUserRefreshTokenToken
+	if o.deviceId != v {
+		o.deviceId = v
+		o.dirty |= dirtyUserRefreshTokenDeviceId
+	}
 }
 
 func (o *UserRefreshToken) Token() string {
 	return o.token
 }
-func (o *UserRefreshToken) SetPrevToken(v string) {
-	if o.prevToken == v {
-		return
+
+func (o *UserRefreshToken) SetToken(v string) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.prevToken = v
-	o.dirty |= dirtyUserRefreshTokenPrevToken
+	if o.token != v {
+		o.token = v
+		o.dirty |= dirtyUserRefreshTokenToken
+	}
 }
 
 func (o *UserRefreshToken) PrevToken() string {
 	return o.prevToken
 }
-func (o *UserRefreshToken) SetRotatedAt(v int64) {
-	if o.rotatedAt == v {
-		return
+
+func (o *UserRefreshToken) SetPrevToken(v string) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.rotatedAt = v
-	o.dirty |= dirtyUserRefreshTokenRotatedAt
+	if o.prevToken != v {
+		o.prevToken = v
+		o.dirty |= dirtyUserRefreshTokenPrevToken
+	}
 }
 
 func (o *UserRefreshToken) RotatedAt() int64 {
 	return o.rotatedAt
 }
-func (o *UserRefreshToken) SetExpiresAt(v int64) {
-	if o.expiresAt == v {
-		return
+
+func (o *UserRefreshToken) SetRotatedAt(v int64) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.expiresAt = v
-	o.dirty |= dirtyUserRefreshTokenExpiresAt
+	if o.rotatedAt != v {
+		o.rotatedAt = v
+		o.dirty |= dirtyUserRefreshTokenRotatedAt
+	}
 }
 
 func (o *UserRefreshToken) ExpiresAt() int64 {
 	return o.expiresAt
 }
-func (o *UserRefreshToken) SetRevokedAt(v int64) {
-	if o.revokedAt == v {
-		return
+
+func (o *UserRefreshToken) SetExpiresAt(v int64) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.revokedAt = v
-	o.dirty |= dirtyUserRefreshTokenRevokedAt
+	if o.expiresAt != v {
+		o.expiresAt = v
+		o.dirty |= dirtyUserRefreshTokenExpiresAt
+	}
 }
 
 func (o *UserRefreshToken) RevokedAt() int64 {
 	return o.revokedAt
 }
 
-func (o *UserRefreshToken) ResetToLoaded() {
-	o.uid = o.origUid
-	o.deviceId = o.origDeviceId
-	o.token = o.origToken
-	o.prevToken = o.origPrevToken
-	o.rotatedAt = o.origRotatedAt
-	o.expiresAt = o.origExpiresAt
-	o.revokedAt = o.origRevokedAt
-	o.deleted = false
+func (o *UserRefreshToken) SetRevokedAt(v int64) {
+	if o.detached {
+		dbctx.PanicDetached(o)
+	}
+	if o.revokedAt != v {
+		o.revokedAt = v
+		o.dirty |= dirtyUserRefreshTokenRevokedAt
+	}
+}
+
+// Delete 标记删除，提交前 flush 成 DELETE；同一事务里之后的查询都看不到这一行。
+func (o *UserRefreshToken) Delete() {
+	if o.detached {
+		dbctx.PanicDetached(o)
+	}
+	if o.loaded {
+		o.deleted = true
+	}
+}
+
+// 以下实现 dbctx.Flusher。
+
+func (o *UserRefreshToken) TableName() string { return "user_refresh_token" }
+
+func (o *UserRefreshToken) Identity() int64 { return o.id }
+
+func (o *UserRefreshToken) IsDeleted() bool { return o.deleted }
+
+func (o *UserRefreshToken) SnapshotState() dbctx.RecordState { return *o }
+
+func (o *UserRefreshToken) RestoreState(s dbctx.RecordState) { *o = s.(UserRefreshToken) }
+
+func (o *UserRefreshToken) Detach() {
+	if o.loaded {
+		o.detached = true
+	}
+}
+
+func (o *UserRefreshToken) DirtyColumns() uint64 {
+	if !o.loaded || o.deleted {
+		return 0
+	}
+	return o.dirty
+}
+
+func (o *UserRefreshToken) FlushStmt() (string, []any) {
+	switch {
+	case !o.loaded:
+		return "", nil
+	case o.deleted:
+		return "DELETE FROM \"user_refresh_token\" WHERE \"id\" = $1", []any{o.id}
+	case o.dirty == 0:
+		return "", nil
+	}
+	return dbctx.UpdateStmt("\"user_refresh_token\"", "\"id\"", o.id, updateColumnsUserRefreshToken, o.dirty,
+		o.uid,
+		o.deviceId,
+		dbctx.Secret(o.token),
+		dbctx.Secret(o.prevToken),
+		o.rotatedAt,
+		o.expiresAt,
+		o.revokedAt,
+	)
+}
+
+func (o *UserRefreshToken) FlushDone() {
+	if o.deleted {
+		o.loaded, o.deleted = false, false
+	}
 	o.dirty = 0
 }
 
-// Delete 把这一行标记为待删除；实际 DELETE 在事务提交前由 flush 统一发出。
-func (v *UserRefreshToken) Delete() {
-	if !v.loaded || v.deleted {
-		return
-	}
-	v.deleted = true
-}
-
-// IsDeleted 报告这一行是否在本次事务里被标记删除。
-func (v *UserRefreshToken) IsDeleted() bool {
-	return v.deleted
-}
-
-func (v *UserRefreshToken) SnapshotState() dbctx.RecordState {
-	return userRefreshTokenState{
-		id:            v.id,
-		uid:           v.uid,
-		deviceId:      v.deviceId,
-		token:         v.token,
-		prevToken:     v.prevToken,
-		rotatedAt:     v.rotatedAt,
-		expiresAt:     v.expiresAt,
-		revokedAt:     v.revokedAt,
-		loaded:        v.loaded,
-		deleted:       v.deleted,
-		origUid:       v.origUid,
-		origDeviceId:  v.origDeviceId,
-		origToken:     v.origToken,
-		origPrevToken: v.origPrevToken,
-		origRotatedAt: v.origRotatedAt,
-		origExpiresAt: v.origExpiresAt,
-		origRevokedAt: v.origRevokedAt,
-		dirty:         v.dirty,
-	}
-}
-
-func (v *UserRefreshToken) RestoreState(state dbctx.RecordState) {
-	s := state.(userRefreshTokenState)
-	v.id = s.id
-	v.uid = s.uid
-	v.deviceId = s.deviceId
-	v.token = s.token
-	v.prevToken = s.prevToken
-	v.rotatedAt = s.rotatedAt
-	v.expiresAt = s.expiresAt
-	v.revokedAt = s.revokedAt
-	v.loaded = s.loaded
-	v.deleted = s.deleted
-	v.origUid = s.origUid
-	v.origDeviceId = s.origDeviceId
-	v.origToken = s.origToken
-	v.origPrevToken = s.origPrevToken
-	v.origRotatedAt = s.origRotatedAt
-	v.origExpiresAt = s.origExpiresAt
-	v.origRevokedAt = s.origRevokedAt
-	v.dirty = s.dirty
-}
-
-// ResetNew 把 Insert 回滚后的对象恢复成"未加载"状态。
-func (v *UserRefreshToken) ResetNew() {
-	v.id = 0
-	v.loaded = false
-	v.deleted = false
-	v.dirty = 0
-}
-
-// TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
-// Transaction 用它们把同一行解析到同一个缓存记录
-// （xdb: getCachedTRecord / addCachedTRecord）。
-func (o *UserRefreshToken) TableName() string {
-	return "user_refresh_token"
-}
-
-// Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
-// 表示这个对象还没有身份。
-func (o *UserRefreshToken) Identity() int64 {
-	return o.id
-}
-
-const selectColumnsUserRefreshToken = "\"id\", \"uid\", \"device_id\", \"token\", \"prev_token\", \"rotated_at\", \"expires_at\", \"revoked_at\""
-
 func scanUserRefreshToken(s dbctx.Scanner) (*UserRefreshToken, error) {
-	var (
-		id        int64
-		uid       int64
-		deviceId  string
-		token     string
-		prevToken string
-		rotatedAt int64
-		expiresAt int64
-		revokedAt int64
-	)
-	if err := s.Scan(
-		&id,
-		&uid,
-		&deviceId,
-		&token,
-		&prevToken,
-		&rotatedAt,
-		&expiresAt,
-		&revokedAt,
-	); err != nil {
+	o := &UserRefreshToken{loaded: true}
+	if err := s.Scan(&o.id, &o.uid, &o.deviceId, &o.token, &o.prevToken, &o.rotatedAt, &o.expiresAt, &o.revokedAt); err != nil {
 		return nil, err
 	}
-	return loadedUserRefreshToken(
-		id,
-		uid,
-		deviceId,
-		token,
-		prevToken,
-		rotatedAt,
-		expiresAt,
-		revokedAt,
-	), nil
+	return o, nil
 }
 
-func (o userRefreshToken) getId(
-	ctx context.Context,
-	q dbctx.Querier,
-	id int64,
-) *UserRefreshToken {
-	const query = "SELECT " + selectColumnsUserRefreshToken +
-		" FROM \"user_refresh_token\"" +
-		" WHERE \"id\" = $1"
+func (t userRefreshToken) queryId(ctx context.Context, q dbctx.Querier, id int64) *UserRefreshToken {
+	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, id)
 }
 
-func (o userRefreshToken) GetById(
-	ctx context.Context,
-	id int64,
-) *UserRefreshToken {
-	if v, ok := dbctx.GetCachedRecordAs[*UserRefreshToken](ctx, "user_refresh_token", id); ok {
-		if v.IsDeleted() {
-			return nil
-		}
-		return v
+func (t userRefreshToken) GetById(ctx context.Context, id int64) *UserRefreshToken {
+	if o, ok := dbctx.GetCachedRecordAs[*UserRefreshToken](ctx, "user_refresh_token", id); ok {
+		return o
 	}
-	return o.getId(
-		ctx,
-		dbctx.SQLTxFromCtx(ctx),
-		id,
-	)
+	return t.queryId(ctx, dbctx.SQLTxFromCtx(ctx), id)
 }
 
-func (o userRefreshToken) SelectById(
-	ctx context.Context,
-	id int64,
-) *UserRefreshToken {
-	return o.getId(
-		ctx,
-		dbctx.QuerierFromCtx(ctx),
-		id,
-	)
+func (t userRefreshToken) SelectById(ctx context.Context, id int64) *UserRefreshToken {
+	return t.queryId(ctx, dbctx.QuerierFromCtx(ctx), id)
 }
 
-func (o userRefreshToken) getUidDeviceId(
-	ctx context.Context,
-	q dbctx.Querier,
-	uid int64, deviceId string,
-) *UserRefreshToken {
-	const query = "SELECT " + selectColumnsUserRefreshToken +
-		" FROM \"user_refresh_token\"" +
-		" WHERE \"uid\" = $1 AND \"device_id\" = $2"
+func (t userRefreshToken) queryUidDeviceId(ctx context.Context, q dbctx.Querier, uid int64, deviceId string) *UserRefreshToken {
+	dbctx.CheckPredicate(ctx, "user_refresh_token", dirtyUserRefreshTokenUid|dirtyUserRefreshTokenDeviceId)
+	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"uid\" = $1 AND \"device_id\" = $2"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, uid, deviceId)
 }
 
-func (o userRefreshToken) GetByUidDeviceId(
-	ctx context.Context,
-	uid int64, deviceId string,
-) *UserRefreshToken {
-	return o.getUidDeviceId(
-		ctx,
-		dbctx.SQLTxFromCtx(ctx),
-		uid, deviceId,
-	)
+func (t userRefreshToken) GetByUidDeviceId(ctx context.Context, uid int64, deviceId string) *UserRefreshToken {
+	return t.queryUidDeviceId(ctx, dbctx.SQLTxFromCtx(ctx), uid, deviceId)
 }
 
-func (o userRefreshToken) SelectByUidDeviceId(
-	ctx context.Context,
-	uid int64, deviceId string,
-) *UserRefreshToken {
-	return o.getUidDeviceId(
-		ctx,
-		dbctx.QuerierFromCtx(ctx),
-		uid, deviceId,
-	)
+func (t userRefreshToken) SelectByUidDeviceId(ctx context.Context, uid int64, deviceId string) *UserRefreshToken {
+	return t.queryUidDeviceId(ctx, dbctx.QuerierFromCtx(ctx), uid, deviceId)
 }
 
-func (o userRefreshToken) getToken(
-	ctx context.Context,
-	q dbctx.Querier,
-	token string,
-) *UserRefreshToken {
-	const query = "SELECT " + selectColumnsUserRefreshToken +
-		" FROM \"user_refresh_token\"" +
-		" WHERE \"token\" = $1"
-	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, token)
+func (t userRefreshToken) queryToken(ctx context.Context, q dbctx.Querier, token string) *UserRefreshToken {
+	dbctx.CheckPredicate(ctx, "user_refresh_token", dirtyUserRefreshTokenToken)
+	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"token\" = $1"
+	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, dbctx.Secret(token))
 }
 
-func (o userRefreshToken) GetByToken(
-	ctx context.Context,
-	token string,
-) *UserRefreshToken {
-	return o.getToken(
-		ctx,
-		dbctx.SQLTxFromCtx(ctx),
-		token,
-	)
+func (t userRefreshToken) GetByToken(ctx context.Context, token string) *UserRefreshToken {
+	return t.queryToken(ctx, dbctx.SQLTxFromCtx(ctx), token)
 }
 
-func (o userRefreshToken) SelectByToken(
-	ctx context.Context,
-	token string,
-) *UserRefreshToken {
-	return o.getToken(
-		ctx,
-		dbctx.QuerierFromCtx(ctx),
-		token,
-	)
+func (t userRefreshToken) SelectByToken(ctx context.Context, token string) *UserRefreshToken {
+	return t.queryToken(ctx, dbctx.QuerierFromCtx(ctx), token)
 }
 
-// DeleteById 在事务里按主键标记删除；找不到返回 false。
-// 实际 DELETE 在事务提交前由 flush 统一发出，失败时由 memento 恢复。
-func (o userRefreshToken) DeleteById(
-	ctx context.Context,
-	id int64,
-) bool {
-	v := o.GetById(ctx, id)
-	if v == nil {
+func (t userRefreshToken) queryPrevToken(ctx context.Context, q dbctx.Querier, prevToken string) []*UserRefreshToken {
+	dbctx.CheckPredicate(ctx, "user_refresh_token", dirtyUserRefreshTokenPrevToken)
+	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"prev_token\" = $1"
+	return dbctx.QueryList(ctx, q, query, scanUserRefreshToken, dbctx.Secret(prevToken))
+}
+
+func (t userRefreshToken) ListByPrevToken(ctx context.Context, prevToken string) []*UserRefreshToken {
+	return t.queryPrevToken(ctx, dbctx.SQLTxFromCtx(ctx), prevToken)
+}
+
+func (t userRefreshToken) SelectListByPrevToken(ctx context.Context, prevToken string) []*UserRefreshToken {
+	return t.queryPrevToken(ctx, dbctx.QuerierFromCtx(ctx), prevToken)
+}
+
+// DeleteById 按主键标记删除，提交前 flush 成 DELETE；找不到返回 false。
+func (t userRefreshToken) DeleteById(ctx context.Context, id int64) bool {
+	o := t.GetById(ctx, id)
+	if o == nil {
 		return false
 	}
-	v.Delete()
+	o.Delete()
 	return true
 }
 
-func (o userRefreshToken) getAll(
-	ctx context.Context,
-	q dbctx.Querier,
-) []*UserRefreshToken {
-	const query = "SELECT " + selectColumnsUserRefreshToken +
-		" FROM \"user_refresh_token\""
-	return dbctx.QueryList(ctx, q, query, scanUserRefreshToken)
+const selectAllUserRefreshToken = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\""
+
+func (t userRefreshToken) GetAll(ctx context.Context) []*UserRefreshToken {
+	return dbctx.QueryList(ctx, dbctx.SQLTxFromCtx(ctx), selectAllUserRefreshToken, scanUserRefreshToken)
 }
 
-func (o userRefreshToken) GetAll(
-	ctx context.Context,
-) []*UserRefreshToken {
-	return o.getAll(ctx, dbctx.SQLTxFromCtx(ctx))
+func (t userRefreshToken) SelectAll(ctx context.Context) []*UserRefreshToken {
+	return dbctx.QueryList(ctx, dbctx.QuerierFromCtx(ctx), selectAllUserRefreshToken, scanUserRefreshToken)
 }
 
-func (o userRefreshToken) SelectAll(
-	ctx context.Context,
-) []*UserRefreshToken {
-	return o.getAll(ctx, dbctx.QuerierFromCtx(ctx))
-}
-
-var ErrUserRefreshTokenNotFound = errors.New(
-	"user_refresh_token: row not found at update time",
-)
-
-// FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// deleted 时返回 DELETE；Transaction 据此跳过没有变化的行。
-func (v *UserRefreshToken) FlushStmt() (string, []any) {
-	if !v.loaded {
-		return "", nil
+// Insert 插入一个 NewUserRefreshToken() 创建的新对象，主键由数据库生成并回填。
+func (t userRefreshToken) Insert(ctx context.Context, o *UserRefreshToken) {
+	if o.loaded {
+		panic("pdbgen: user_refresh_token: Insert 只接受 NewUserRefreshToken() 创建、还没插入过的对象")
 	}
-	if v.deleted {
-		return "DELETE FROM \"user_refresh_token\" WHERE \"id\" = $1", []any{v.id}
-	}
-	if v.dirty == 0 {
-		return "", nil
-	}
-	var sb strings.Builder
-	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE \"user_refresh_token\" SET ")
-	if v.dirty&dirtyUserRefreshTokenUid != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.uid)
-		sb.WriteString("\"uid\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserRefreshTokenDeviceId != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.deviceId)
-		sb.WriteString("\"device_id\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserRefreshTokenToken != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.token)
-		sb.WriteString("\"token\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserRefreshTokenPrevToken != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.prevToken)
-		sb.WriteString("\"prev_token\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserRefreshTokenRotatedAt != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.rotatedAt)
-		sb.WriteString("\"rotated_at\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserRefreshTokenExpiresAt != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.expiresAt)
-		sb.WriteString("\"expires_at\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserRefreshTokenRevokedAt != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.revokedAt)
-		sb.WriteString("\"revoked_at\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	args = append(args, v.id)
-	sb.WriteString(" WHERE \"id\" = $")
-	sb.WriteString(strconv.Itoa(len(args)))
-	return sb.String(), args
-}
-
-// FlushDone 实现 dbctx.Flusher，在对应 UPDATE/DELETE 执行成功后回调。
-// UPDATE 同步 orig 快照并清空 dirty；DELETE 把对象置为未加载。
-// rows == 0 说明这一行已经不存在。
-func (v *UserRefreshToken) FlushDone(rows int64) error {
-	if rows == 0 {
-		return ErrUserRefreshTokenNotFound
-	}
-	if v.deleted {
-		v.dirty = 0
-		v.loaded = false
-		v.deleted = false
-		return nil
-	}
-	v.origUid = v.uid
-	v.origDeviceId = v.deviceId
-	v.origToken = v.token
-	v.origPrevToken = v.prevToken
-	v.origRotatedAt = v.rotatedAt
-	v.origExpiresAt = v.expiresAt
-	v.origRevokedAt = v.revokedAt
-	v.dirty = 0
-	return nil
-}
-
-// Update 是不经过 Transaction 的直接落库入口，
-// 生成代码内部不再调用它，仅供业务代码需要立即写库时使用。
-func (o userRefreshToken) Update(
-	ctx context.Context,
-	v *UserRefreshToken,
-) error {
-	query, args := v.FlushStmt()
-	if query == "" {
-		return nil
-	}
-	tag, err := dbctx.SQLTxFromCtx(ctx).Exec(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("user_refresh_token update: %w", err)
-	}
-	return v.FlushDone(tag.RowsAffected())
-}
-
-func (o userRefreshToken) Insert(
-	ctx context.Context,
-	v *UserRefreshToken,
-) {
-	dbctx.RegisterNew(ctx, v)
 	tx := dbctx.SQLTxFromCtx(ctx)
-	const query = "INSERT INTO \"user_refresh_token\" " +
-		"(\"uid\", \"device_id\", \"token\", \"prev_token\", \"rotated_at\", \"expires_at\", \"revoked_at\") " +
-		"VALUES ($1, $2, $3, $4, $5, $6, $7)" +
-		" RETURNING \"id\""
-
-	row := tx.QueryRow(
-		ctx,
-		query,
-		v.uid,
-		v.deviceId,
-		v.token,
-		v.prevToken,
-		v.rotatedAt,
-		v.expiresAt,
-		v.revokedAt,
-	)
-	if err := row.Scan(
-		&v.id,
-	); err != nil {
+	dbctx.GetOrAddCachedRecord(ctx, o) // 主键还是 0：只登记快照，回滚时恢复成插入前的样子
+	const query = "INSERT INTO \"user_refresh_token\" (\"uid\", \"device_id\", \"token\", \"prev_token\", \"rotated_at\", \"expires_at\", \"revoked_at\") VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING \"id\""
+	if err := tx.QueryRow(ctx, query,
+		o.uid,
+		o.deviceId,
+		dbctx.Secret(o.token),
+		dbctx.Secret(o.prevToken),
+		o.rotatedAt,
+		o.expiresAt,
+		o.revokedAt,
+	).Scan(&o.id); err != nil {
 		panic(err)
 	}
-
-	v.loaded = true
-
-	v.origUid = v.uid
-
-	v.origDeviceId = v.deviceId
-
-	v.origToken = v.token
-
-	v.origPrevToken = v.prevToken
-
-	v.origRotatedAt = v.rotatedAt
-
-	v.origExpiresAt = v.expiresAt
-
-	v.origRevokedAt = v.revokedAt
-
-	v.dirty = 0
-	dbctx.GetOrAddCachedRecord(ctx, v)
+	o.loaded, o.dirty = true, 0
+	dbctx.GetOrAddCachedRecord(ctx, o) // 主键回填后进身份表
 }

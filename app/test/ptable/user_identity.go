@@ -4,11 +4,6 @@ package ptable
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"math/bits"
-	"strconv"
-	"strings"
 
 	"pdbgen/dbctx"
 )
@@ -17,6 +12,19 @@ var UserIdentityTable userIdentity
 
 type userIdentity struct{}
 
+type UserIdentity struct {
+	id          int64
+	platform    int16
+	platformUID string
+	uid         int64
+	createdAt   int64
+
+	loaded   bool   // 对应数据库里的一行：查出来的，或者 Insert 过的
+	deleted  bool   // 标记了删除，提交前 flush 成 DELETE
+	detached bool   // 脱离了事务：SetXxx / Delete 会 panic
+	dirty    uint64 // 改过、还没落库的列，第 i 位对应 updateColumnsUserIdentity[i]
+}
+
 const (
 	dirtyUserIdentityPlatform    uint64 = 1 << 0
 	dirtyUserIdentityPlatformUID uint64 = 1 << 1
@@ -24,483 +32,226 @@ const (
 	dirtyUserIdentityCreatedAt   uint64 = 1 << 3
 )
 
-type UserIdentity struct {
-	id              int64
-	platform        int16
-	platformUID     string
-	uid             int64
-	createdAt       int64
-	loaded          bool
-	deleted         bool
-	origPlatform    int16
-	origPlatformUID string
-	origUid         int64
-	origCreatedAt   int64
-	dirty           uint64
+var updateColumnsUserIdentity = []string{
+	"\"platform\"",
+	"\"platform_uid\"",
+	"\"uid\"",
+	"\"created_at\"",
 }
 
-type userIdentityState struct {
-	id              int64
-	platform        int16
-	platformUID     string
-	uid             int64
-	createdAt       int64
-	loaded          bool
-	deleted         bool
-	origPlatform    int16
-	origPlatformUID string
-	origUid         int64
-	origCreatedAt   int64
-	dirty           uint64
-}
+const selectColumnsUserIdentity = "\"id\", \"platform\", \"platform_uid\", \"uid\", \"created_at\""
 
 func NewUserIdentity() *UserIdentity {
 	return &UserIdentity{}
 }
 
-func loadedUserIdentity(
-	id int64,
-	platform int16,
-	platformUID string,
-	uid int64,
-	createdAt int64,
-) *UserIdentity {
-	return &UserIdentity{
-		id:              id,
-		platform:        platform,
-		platformUID:     platformUID,
-		uid:             uid,
-		createdAt:       createdAt,
-		loaded:          true,
-		origPlatform:    platform,
-		origPlatformUID: platformUID,
-		origUid:         uid,
-		origCreatedAt:   createdAt,
-	}
-}
-
 func (o *UserIdentity) Id() int64 {
 	return o.id
-}
-func (o *UserIdentity) SetPlatform(v int16) {
-	if o.platform == v {
-		return
-	}
-	o.platform = v
-	o.dirty |= dirtyUserIdentityPlatform
 }
 
 func (o *UserIdentity) Platform() int16 {
 	return o.platform
 }
-func (o *UserIdentity) SetPlatformUID(v string) {
-	if o.platformUID == v {
-		return
+
+func (o *UserIdentity) SetPlatform(v int16) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.platformUID = v
-	o.dirty |= dirtyUserIdentityPlatformUID
+	if o.platform != v {
+		o.platform = v
+		o.dirty |= dirtyUserIdentityPlatform
+	}
 }
 
 func (o *UserIdentity) PlatformUID() string {
 	return o.platformUID
 }
-func (o *UserIdentity) SetUid(v int64) {
-	if o.uid == v {
-		return
+
+func (o *UserIdentity) SetPlatformUID(v string) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.uid = v
-	o.dirty |= dirtyUserIdentityUid
+	if o.platformUID != v {
+		o.platformUID = v
+		o.dirty |= dirtyUserIdentityPlatformUID
+	}
 }
 
 func (o *UserIdentity) Uid() int64 {
 	return o.uid
 }
-func (o *UserIdentity) SetCreatedAt(v int64) {
-	if o.createdAt == v {
-		return
+
+func (o *UserIdentity) SetUid(v int64) {
+	if o.detached {
+		dbctx.PanicDetached(o)
 	}
-	o.createdAt = v
-	o.dirty |= dirtyUserIdentityCreatedAt
+	if o.uid != v {
+		o.uid = v
+		o.dirty |= dirtyUserIdentityUid
+	}
 }
 
 func (o *UserIdentity) CreatedAt() int64 {
 	return o.createdAt
 }
 
-func (o *UserIdentity) ResetToLoaded() {
-	o.platform = o.origPlatform
-	o.platformUID = o.origPlatformUID
-	o.uid = o.origUid
-	o.createdAt = o.origCreatedAt
-	o.deleted = false
+func (o *UserIdentity) SetCreatedAt(v int64) {
+	if o.detached {
+		dbctx.PanicDetached(o)
+	}
+	if o.createdAt != v {
+		o.createdAt = v
+		o.dirty |= dirtyUserIdentityCreatedAt
+	}
+}
+
+// Delete 标记删除，提交前 flush 成 DELETE；同一事务里之后的查询都看不到这一行。
+func (o *UserIdentity) Delete() {
+	if o.detached {
+		dbctx.PanicDetached(o)
+	}
+	if o.loaded {
+		o.deleted = true
+	}
+}
+
+// 以下实现 dbctx.Flusher。
+
+func (o *UserIdentity) TableName() string { return "user_identity" }
+
+func (o *UserIdentity) Identity() int64 { return o.id }
+
+func (o *UserIdentity) IsDeleted() bool { return o.deleted }
+
+func (o *UserIdentity) SnapshotState() dbctx.RecordState { return *o }
+
+func (o *UserIdentity) RestoreState(s dbctx.RecordState) { *o = s.(UserIdentity) }
+
+func (o *UserIdentity) Detach() {
+	if o.loaded {
+		o.detached = true
+	}
+}
+
+func (o *UserIdentity) DirtyColumns() uint64 {
+	if !o.loaded || o.deleted {
+		return 0
+	}
+	return o.dirty
+}
+
+func (o *UserIdentity) FlushStmt() (string, []any) {
+	switch {
+	case !o.loaded:
+		return "", nil
+	case o.deleted:
+		return "DELETE FROM \"user_identity\" WHERE \"id\" = $1", []any{o.id}
+	case o.dirty == 0:
+		return "", nil
+	}
+	return dbctx.UpdateStmt("\"user_identity\"", "\"id\"", o.id, updateColumnsUserIdentity, o.dirty,
+		o.platform,
+		o.platformUID,
+		o.uid,
+		o.createdAt,
+	)
+}
+
+func (o *UserIdentity) FlushDone() {
+	if o.deleted {
+		o.loaded, o.deleted = false, false
+	}
 	o.dirty = 0
 }
 
-// Delete 把这一行标记为待删除；实际 DELETE 在事务提交前由 flush 统一发出。
-func (v *UserIdentity) Delete() {
-	if !v.loaded || v.deleted {
-		return
-	}
-	v.deleted = true
-}
-
-// IsDeleted 报告这一行是否在本次事务里被标记删除。
-func (v *UserIdentity) IsDeleted() bool {
-	return v.deleted
-}
-
-func (v *UserIdentity) SnapshotState() dbctx.RecordState {
-	return userIdentityState{
-		id:              v.id,
-		platform:        v.platform,
-		platformUID:     v.platformUID,
-		uid:             v.uid,
-		createdAt:       v.createdAt,
-		loaded:          v.loaded,
-		deleted:         v.deleted,
-		origPlatform:    v.origPlatform,
-		origPlatformUID: v.origPlatformUID,
-		origUid:         v.origUid,
-		origCreatedAt:   v.origCreatedAt,
-		dirty:           v.dirty,
-	}
-}
-
-func (v *UserIdentity) RestoreState(state dbctx.RecordState) {
-	s := state.(userIdentityState)
-	v.id = s.id
-	v.platform = s.platform
-	v.platformUID = s.platformUID
-	v.uid = s.uid
-	v.createdAt = s.createdAt
-	v.loaded = s.loaded
-	v.deleted = s.deleted
-	v.origPlatform = s.origPlatform
-	v.origPlatformUID = s.origPlatformUID
-	v.origUid = s.origUid
-	v.origCreatedAt = s.origCreatedAt
-	v.dirty = s.dirty
-}
-
-// ResetNew 把 Insert 回滚后的对象恢复成"未加载"状态。
-func (v *UserIdentity) ResetNew() {
-	v.id = 0
-	v.loaded = false
-	v.deleted = false
-	v.dirty = 0
-}
-
-// TableName 实现 dbctx.Flusher，和 Identity 一起给出一行的身份，
-// Transaction 用它们把同一行解析到同一个缓存记录
-// （xdb: getCachedTRecord / addCachedTRecord）。
-func (o *UserIdentity) TableName() string {
-	return "user_identity"
-}
-
-// Identity 实现 dbctx.Flusher。主键自增且还没回填时返回零值，
-// 表示这个对象还没有身份。
-func (o *UserIdentity) Identity() int64 {
-	return o.id
-}
-
-const selectColumnsUserIdentity = "\"id\", \"platform\", \"platform_uid\", \"uid\", \"created_at\""
-
 func scanUserIdentity(s dbctx.Scanner) (*UserIdentity, error) {
-	var (
-		id          int64
-		platform    int16
-		platformUID string
-		uid         int64
-		createdAt   int64
-	)
-	if err := s.Scan(
-		&id,
-		&platform,
-		&platformUID,
-		&uid,
-		&createdAt,
-	); err != nil {
+	o := &UserIdentity{loaded: true}
+	if err := s.Scan(&o.id, &o.platform, &o.platformUID, &o.uid, &o.createdAt); err != nil {
 		return nil, err
 	}
-	return loadedUserIdentity(
-		id,
-		platform,
-		platformUID,
-		uid,
-		createdAt,
-	), nil
+	return o, nil
 }
 
-func (o userIdentity) getId(
-	ctx context.Context,
-	q dbctx.Querier,
-	id int64,
-) *UserIdentity {
-	const query = "SELECT " + selectColumnsUserIdentity +
-		" FROM \"user_identity\"" +
-		" WHERE \"id\" = $1"
+func (t userIdentity) queryId(ctx context.Context, q dbctx.Querier, id int64) *UserIdentity {
+	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"user_identity\" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserIdentity, id)
 }
 
-func (o userIdentity) GetById(
-	ctx context.Context,
-	id int64,
-) *UserIdentity {
-	if v, ok := dbctx.GetCachedRecordAs[*UserIdentity](ctx, "user_identity", id); ok {
-		if v.IsDeleted() {
-			return nil
-		}
-		return v
+func (t userIdentity) GetById(ctx context.Context, id int64) *UserIdentity {
+	if o, ok := dbctx.GetCachedRecordAs[*UserIdentity](ctx, "user_identity", id); ok {
+		return o
 	}
-	return o.getId(
-		ctx,
-		dbctx.SQLTxFromCtx(ctx),
-		id,
-	)
+	return t.queryId(ctx, dbctx.SQLTxFromCtx(ctx), id)
 }
 
-func (o userIdentity) SelectById(
-	ctx context.Context,
-	id int64,
-) *UserIdentity {
-	return o.getId(
-		ctx,
-		dbctx.QuerierFromCtx(ctx),
-		id,
-	)
+func (t userIdentity) SelectById(ctx context.Context, id int64) *UserIdentity {
+	return t.queryId(ctx, dbctx.QuerierFromCtx(ctx), id)
 }
 
-func (o userIdentity) listUid(
-	ctx context.Context,
-	q dbctx.Querier,
-	uid int64,
-) []*UserIdentity {
-	const query = "SELECT " + selectColumnsUserIdentity +
-		" FROM \"user_identity\"" +
-		" WHERE \"uid\" = $1"
+func (t userIdentity) queryUid(ctx context.Context, q dbctx.Querier, uid int64) []*UserIdentity {
+	dbctx.CheckPredicate(ctx, "user_identity", dirtyUserIdentityUid)
+	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"user_identity\" WHERE \"uid\" = $1"
 	return dbctx.QueryList(ctx, q, query, scanUserIdentity, uid)
 }
 
-func (o userIdentity) ListByUid(
-	ctx context.Context,
-	uid int64,
-) []*UserIdentity {
-	return o.listUid(
-		ctx,
-		dbctx.SQLTxFromCtx(ctx),
-		uid,
-	)
+func (t userIdentity) ListByUid(ctx context.Context, uid int64) []*UserIdentity {
+	return t.queryUid(ctx, dbctx.SQLTxFromCtx(ctx), uid)
 }
 
-func (o userIdentity) SelectListByUid(
-	ctx context.Context,
-	uid int64,
-) []*UserIdentity {
-	return o.listUid(
-		ctx,
-		dbctx.QuerierFromCtx(ctx),
-		uid,
-	)
+func (t userIdentity) SelectListByUid(ctx context.Context, uid int64) []*UserIdentity {
+	return t.queryUid(ctx, dbctx.QuerierFromCtx(ctx), uid)
 }
 
-func (o userIdentity) getPlatformPlatformUID(
-	ctx context.Context,
-	q dbctx.Querier,
-	platform int16, platformUID string,
-) *UserIdentity {
-	const query = "SELECT " + selectColumnsUserIdentity +
-		" FROM \"user_identity\"" +
-		" WHERE \"platform\" = $1 AND \"platform_uid\" = $2"
+func (t userIdentity) queryPlatformPlatformUID(ctx context.Context, q dbctx.Querier, platform int16, platformUID string) *UserIdentity {
+	dbctx.CheckPredicate(ctx, "user_identity", dirtyUserIdentityPlatform|dirtyUserIdentityPlatformUID)
+	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"user_identity\" WHERE \"platform\" = $1 AND \"platform_uid\" = $2"
 	return dbctx.QueryOne(ctx, q, query, scanUserIdentity, platform, platformUID)
 }
 
-func (o userIdentity) GetByPlatformPlatformUID(
-	ctx context.Context,
-	platform int16, platformUID string,
-) *UserIdentity {
-	return o.getPlatformPlatformUID(
-		ctx,
-		dbctx.SQLTxFromCtx(ctx),
-		platform, platformUID,
-	)
+func (t userIdentity) GetByPlatformPlatformUID(ctx context.Context, platform int16, platformUID string) *UserIdentity {
+	return t.queryPlatformPlatformUID(ctx, dbctx.SQLTxFromCtx(ctx), platform, platformUID)
 }
 
-func (o userIdentity) SelectByPlatformPlatformUID(
-	ctx context.Context,
-	platform int16, platformUID string,
-) *UserIdentity {
-	return o.getPlatformPlatformUID(
-		ctx,
-		dbctx.QuerierFromCtx(ctx),
-		platform, platformUID,
-	)
+func (t userIdentity) SelectByPlatformPlatformUID(ctx context.Context, platform int16, platformUID string) *UserIdentity {
+	return t.queryPlatformPlatformUID(ctx, dbctx.QuerierFromCtx(ctx), platform, platformUID)
 }
 
-// DeleteById 在事务里按主键标记删除；找不到返回 false。
-// 实际 DELETE 在事务提交前由 flush 统一发出，失败时由 memento 恢复。
-func (o userIdentity) DeleteById(
-	ctx context.Context,
-	id int64,
-) bool {
-	v := o.GetById(ctx, id)
-	if v == nil {
+// DeleteById 按主键标记删除，提交前 flush 成 DELETE；找不到返回 false。
+func (t userIdentity) DeleteById(ctx context.Context, id int64) bool {
+	o := t.GetById(ctx, id)
+	if o == nil {
 		return false
 	}
-	v.Delete()
+	o.Delete()
 	return true
 }
 
-func (o userIdentity) getAll(
-	ctx context.Context,
-	q dbctx.Querier,
-) []*UserIdentity {
-	const query = "SELECT " + selectColumnsUserIdentity +
-		" FROM \"user_identity\""
-	return dbctx.QueryList(ctx, q, query, scanUserIdentity)
+const selectAllUserIdentity = "SELECT " + selectColumnsUserIdentity + " FROM \"user_identity\""
+
+func (t userIdentity) GetAll(ctx context.Context) []*UserIdentity {
+	return dbctx.QueryList(ctx, dbctx.SQLTxFromCtx(ctx), selectAllUserIdentity, scanUserIdentity)
 }
 
-func (o userIdentity) GetAll(
-	ctx context.Context,
-) []*UserIdentity {
-	return o.getAll(ctx, dbctx.SQLTxFromCtx(ctx))
+func (t userIdentity) SelectAll(ctx context.Context) []*UserIdentity {
+	return dbctx.QueryList(ctx, dbctx.QuerierFromCtx(ctx), selectAllUserIdentity, scanUserIdentity)
 }
 
-func (o userIdentity) SelectAll(
-	ctx context.Context,
-) []*UserIdentity {
-	return o.getAll(ctx, dbctx.QuerierFromCtx(ctx))
-}
-
-var ErrUserIdentityNotFound = errors.New(
-	"user_identity: row not found at update time",
-)
-
-// FlushStmt 实现 dbctx.Flusher。dirty == 0 时返回空 query，
-// deleted 时返回 DELETE；Transaction 据此跳过没有变化的行。
-func (v *UserIdentity) FlushStmt() (string, []any) {
-	if !v.loaded {
-		return "", nil
+// Insert 插入一个 NewUserIdentity() 创建的新对象，主键由数据库生成并回填。
+func (t userIdentity) Insert(ctx context.Context, o *UserIdentity) {
+	if o.loaded {
+		panic("pdbgen: user_identity: Insert 只接受 NewUserIdentity() 创建、还没插入过的对象")
 	}
-	if v.deleted {
-		return "DELETE FROM \"user_identity\" WHERE \"id\" = $1", []any{v.id}
-	}
-	if v.dirty == 0 {
-		return "", nil
-	}
-	var sb strings.Builder
-	args := make([]any, 0, bits.OnesCount64(v.dirty)+1)
-	sb.WriteString("UPDATE \"user_identity\" SET ")
-	if v.dirty&dirtyUserIdentityPlatform != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.platform)
-		sb.WriteString("\"platform\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserIdentityPlatformUID != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.platformUID)
-		sb.WriteString("\"platform_uid\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserIdentityUid != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.uid)
-		sb.WriteString("\"uid\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	if v.dirty&dirtyUserIdentityCreatedAt != 0 {
-		if len(args) > 0 {
-			sb.WriteString(", ")
-		}
-		args = append(args, v.createdAt)
-		sb.WriteString("\"created_at\" = $")
-		sb.WriteString(strconv.Itoa(len(args)))
-	}
-	args = append(args, v.id)
-	sb.WriteString(" WHERE \"id\" = $")
-	sb.WriteString(strconv.Itoa(len(args)))
-	return sb.String(), args
-}
-
-// FlushDone 实现 dbctx.Flusher，在对应 UPDATE/DELETE 执行成功后回调。
-// UPDATE 同步 orig 快照并清空 dirty；DELETE 把对象置为未加载。
-// rows == 0 说明这一行已经不存在。
-func (v *UserIdentity) FlushDone(rows int64) error {
-	if rows == 0 {
-		return ErrUserIdentityNotFound
-	}
-	if v.deleted {
-		v.dirty = 0
-		v.loaded = false
-		v.deleted = false
-		return nil
-	}
-	v.origPlatform = v.platform
-	v.origPlatformUID = v.platformUID
-	v.origUid = v.uid
-	v.origCreatedAt = v.createdAt
-	v.dirty = 0
-	return nil
-}
-
-// Update 是不经过 Transaction 的直接落库入口，
-// 生成代码内部不再调用它，仅供业务代码需要立即写库时使用。
-func (o userIdentity) Update(
-	ctx context.Context,
-	v *UserIdentity,
-) error {
-	query, args := v.FlushStmt()
-	if query == "" {
-		return nil
-	}
-	tag, err := dbctx.SQLTxFromCtx(ctx).Exec(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("user_identity update: %w", err)
-	}
-	return v.FlushDone(tag.RowsAffected())
-}
-
-func (o userIdentity) Insert(
-	ctx context.Context,
-	v *UserIdentity,
-) {
-	dbctx.RegisterNew(ctx, v)
 	tx := dbctx.SQLTxFromCtx(ctx)
-	const query = "INSERT INTO \"user_identity\" " +
-		"(\"platform\", \"platform_uid\", \"uid\", \"created_at\") " +
-		"VALUES ($1, $2, $3, $4)" +
-		" RETURNING \"id\""
-
-	row := tx.QueryRow(
-		ctx,
-		query,
-		v.platform,
-		v.platformUID,
-		v.uid,
-		v.createdAt,
-	)
-	if err := row.Scan(
-		&v.id,
-	); err != nil {
+	dbctx.GetOrAddCachedRecord(ctx, o) // 主键还是 0：只登记快照，回滚时恢复成插入前的样子
+	const query = "INSERT INTO \"user_identity\" (\"platform\", \"platform_uid\", \"uid\", \"created_at\") VALUES ($1, $2, $3, $4) RETURNING \"id\""
+	if err := tx.QueryRow(ctx, query,
+		o.platform,
+		o.platformUID,
+		o.uid,
+		o.createdAt,
+	).Scan(&o.id); err != nil {
 		panic(err)
 	}
-
-	v.loaded = true
-
-	v.origPlatform = v.platform
-
-	v.origPlatformUID = v.platformUID
-
-	v.origUid = v.uid
-
-	v.origCreatedAt = v.createdAt
-
-	v.dirty = 0
-	dbctx.GetOrAddCachedRecord(ctx, v)
+	o.loaded, o.dirty = true, 0
+	dbctx.GetOrAddCachedRecord(ctx, o) // 主键回填后进身份表
 }

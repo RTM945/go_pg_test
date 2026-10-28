@@ -77,7 +77,8 @@ func (s *Session) Flush() error {
 		}
 		payload = payload[:n]
 
-		frames = append(frames, fmt.Sprintf("typeId=%d msg=%v", msg.TypeId(), msg))
+		// 经过 slog 的 Resolve：消息实现了 LogValuer 时用它（sensitive 字段打成 "***"）
+		frames = append(frames, fmt.Sprintf("typeId=%d msg=%s", msg.TypeId(), slog.AnyValue(msg).Resolve()))
 		if buf, err = io.AppendFrame(buf, msg.TypeId(), payload); err != nil {
 			return err
 		}
