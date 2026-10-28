@@ -4,9 +4,6 @@
 package msg
 
 import (
-	"log/slog"
-
-	"go_pg_test/common/logging"
 	"go_pg_test/io"
 
 	testpb "go_pg_test/genpb/test"
@@ -52,11 +49,6 @@ func (m *CMails) Write(buffer []byte) (int, error) {
 	return m.CMails.MarshalToVT(buffer)
 }
 
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *CMails) LogValue() slog.Value {
-	return logging.ProtoValue(m.CMails)
-}
-
 // SMails 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
 // 不用为每个协议再写一遍字段访问器。
 type SMails struct {
@@ -95,11 +87,6 @@ func (m *SMails) Read(buffer []byte) error {
 
 func (m *SMails) Write(buffer []byte) (int, error) {
 	return m.SMails.MarshalToVT(buffer)
-}
-
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *SMails) LogValue() slog.Value {
-	return logging.ProtoValue(m.SMails)
 }
 
 // CReadMail 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
@@ -142,11 +129,6 @@ func (m *CReadMail) Write(buffer []byte) (int, error) {
 	return m.CReadMail.MarshalToVT(buffer)
 }
 
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *CReadMail) LogValue() slog.Value {
-	return logging.ProtoValue(m.CReadMail)
-}
-
 // CGetAttachment 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
 // 不用为每个协议再写一遍字段访问器。
 type CGetAttachment struct {
@@ -187,11 +169,6 @@ func (m *CGetAttachment) Write(buffer []byte) (int, error) {
 	return m.CGetAttachment.MarshalToVT(buffer)
 }
 
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *CGetAttachment) LogValue() slog.Value {
-	return logging.ProtoValue(m.CGetAttachment)
-}
-
 // SGetAttachment 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
 // 不用为每个协议再写一遍字段访问器。
 type SGetAttachment struct {
@@ -230,9 +207,4 @@ func (m *SGetAttachment) Read(buffer []byte) error {
 
 func (m *SGetAttachment) Write(buffer []byte) (int, error) {
 	return m.SGetAttachment.MarshalToVT(buffer)
-}
-
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *SGetAttachment) LogValue() slog.Value {
-	return logging.ProtoValue(m.SGetAttachment)
 }

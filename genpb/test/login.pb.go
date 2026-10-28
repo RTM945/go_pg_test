@@ -26,7 +26,7 @@ type Login struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Plat    string                 `protobuf:"bytes,1,opt,name=plat,proto3" json:"plat,omitempty"`
 	Account string                 `protobuf:"bytes,2,opt,name=account,proto3" json:"account,omitempty"`
-	// ext 里有免登录用的 refreshToken（key 1），日志里整体隐去 value
+	// ext 里有免登录用的 refreshToken（key 1）
 	Ext           map[int32]string `protobuf:"bytes,3,rep,name=ext,proto3" json:"ext,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	ClientVersion string           `protobuf:"bytes,4,opt,name=clientVersion,proto3" json:"clientVersion,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -157,19 +157,19 @@ var File_test_login_proto protoreflect.FileDescriptor
 
 const file_test_login_proto_rawDesc = "" +
 	"\n" +
-	"\x10test/login.proto\x1a\text.proto\"\xc2\x01\n" +
+	"\x10test/login.proto\x1a\text.proto\"\xbc\x01\n" +
 	"\x05Login\x12\x12\n" +
 	"\x04plat\x18\x01 \x01(\tR\x04plat\x12\x18\n" +
-	"\aaccount\x18\x02 \x01(\tR\aaccount\x12'\n" +
-	"\x03ext\x18\x03 \x03(\v2\x0f.Login.ExtEntryB\x04\x98\x82\x19\x01R\x03ext\x12$\n" +
+	"\aaccount\x18\x02 \x01(\tR\aaccount\x12!\n" +
+	"\x03ext\x18\x03 \x03(\v2\x0f.Login.ExtEntryR\x03ext\x12$\n" +
 	"\rclientVersion\x18\x04 \x01(\tR\rclientVersion\x1a6\n" +
 	"\bExtEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x05R\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x04\x90\x82\x19e\"c\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x04\x90\x82\x19e\"]\n" +
 	"\vLoginResult\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\x03R\x03uid\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12(\n" +
-	"\frefreshToken\x18\x03 \x01(\tB\x04\x98\x82\x19\x01R\frefreshToken:\x04\x90\x82\x19fB\x1eZ\x1cgo_pg_test/genpb/test;testpbb\x06proto3"
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\"\n" +
+	"\frefreshToken\x18\x03 \x01(\tR\frefreshToken:\x04\x90\x82\x19fB\x1eZ\x1cgo_pg_test/genpb/test;testpbb\x06proto3"
 
 var (
 	file_test_login_proto_rawDescOnce sync.Once

@@ -4,9 +4,6 @@
 package msg
 
 import (
-	"log/slog"
-
-	"go_pg_test/common/logging"
 	"go_pg_test/io"
 
 	testpb "go_pg_test/genpb/test"
@@ -52,11 +49,6 @@ func (m *Login) Write(buffer []byte) (int, error) {
 	return m.Login.MarshalToVT(buffer)
 }
 
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *Login) LogValue() slog.Value {
-	return logging.ProtoValue(m.Login)
-}
-
 // LoginResult 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
 // 不用为每个协议再写一遍字段访问器。
 type LoginResult struct {
@@ -95,9 +87,4 @@ func (m *LoginResult) Read(buffer []byte) error {
 
 func (m *LoginResult) Write(buffer []byte) (int, error) {
 	return m.LoginResult.MarshalToVT(buffer)
-}
-
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *LoginResult) LogValue() slog.Value {
-	return logging.ProtoValue(m.LoginResult)
 }

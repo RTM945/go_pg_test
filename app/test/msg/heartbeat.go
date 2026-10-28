@@ -4,9 +4,6 @@
 package msg
 
 import (
-	"log/slog"
-
-	"go_pg_test/common/logging"
 	"go_pg_test/io"
 
 	testpb "go_pg_test/genpb/test"
@@ -50,9 +47,4 @@ func (m *Heartbeat) Read(buffer []byte) error {
 
 func (m *Heartbeat) Write(buffer []byte) (int, error) {
 	return m.Heartbeat.MarshalToVT(buffer)
-}
-
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *Heartbeat) LogValue() slog.Value {
-	return logging.ProtoValue(m.Heartbeat)
 }

@@ -11,8 +11,8 @@ message Login {
 
   string plat = 1;
   string account = 2;
-  // ext 里有免登录用的 refreshToken（key 1），日志里整体隐去 value
-  map<int32, string> ext = 3 [(proto.sensitive) = true];
+  // ext 里有免登录用的 refreshToken（key 1）
+  map<int32, string> ext = 3;
   string clientVersion = 4;
 }
 
@@ -23,5 +23,5 @@ message LoginResult {
   string name = 2;
   // 轮换后的免登录凭证；loginToken 和 requestToken 走响应头：
   //   X-Login-Token / X-Request-Token
-  string refreshToken = 3 [(proto.sensitive) = true];
+  string refreshToken = 3;
 }

@@ -17,10 +17,3 @@ option go_package = "go_pg_test/genpb/common;commonpb";
 extend google.protobuf.MessageOptions {
   int32 type_id = 51234;
 }
-
-// 字段打上 (proto.sensitive) = true（refresh token、密码之类），日志里只打成 "***"：
-// genpb 生成的消息包装类实现了 slog.LogValuer，收发日志都经过它。
-// map 字段只隐去 value，key 照常显示。
-extend google.protobuf.FieldOptions {
-  bool sensitive = 51235;
-}

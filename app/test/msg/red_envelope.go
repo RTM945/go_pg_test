@@ -4,9 +4,6 @@
 package msg
 
 import (
-	"log/slog"
-
-	"go_pg_test/common/logging"
 	"go_pg_test/io"
 
 	testpb "go_pg_test/genpb/test"
@@ -52,11 +49,6 @@ func (m *CRedEnvelope) Write(buffer []byte) (int, error) {
 	return m.CRedEnvelope.MarshalToVT(buffer)
 }
 
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *CRedEnvelope) LogValue() slog.Value {
-	return logging.ProtoValue(m.CRedEnvelope)
-}
-
 // SRedEnvelope 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
 // 不用为每个协议再写一遍字段访问器。
 type SRedEnvelope struct {
@@ -97,11 +89,6 @@ func (m *SRedEnvelope) Write(buffer []byte) (int, error) {
 	return m.SRedEnvelope.MarshalToVT(buffer)
 }
 
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *SRedEnvelope) LogValue() slog.Value {
-	return logging.ProtoValue(m.SRedEnvelope)
-}
-
 // CRedEnvelopeClick 内嵌生成的 protobuf 类型，字段和 GetXxx 都直接可用，
 // 不用为每个协议再写一遍字段访问器。
 type CRedEnvelopeClick struct {
@@ -140,9 +127,4 @@ func (m *CRedEnvelopeClick) Read(buffer []byte) error {
 
 func (m *CRedEnvelopeClick) Write(buffer []byte) (int, error) {
 	return m.CRedEnvelopeClick.MarshalToVT(buffer)
-}
-
-// LogValue 让日志里的 (proto.sensitive) 字段只打成 "***"。
-func (m *CRedEnvelopeClick) LogValue() slog.Value {
-	return logging.ProtoValue(m.CRedEnvelopeClick)
 }
