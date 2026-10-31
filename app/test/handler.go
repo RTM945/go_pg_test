@@ -11,7 +11,6 @@ import (
 	appsession "go_pg_test/app/test/session"
 	"go_pg_test/common/dispatch"
 	"go_pg_test/common/httpserver"
-	"go_pg_test/common/redis"
 	"go_pg_test/io"
 )
 
@@ -70,11 +69,11 @@ func writeError(w http.ResponseWriter, log *slog.Logger, typeId int32, uid int64
 	http.Error(w, body, statusOf[ce.Kind])
 }
 
-// handler 把传输、认证、token、错误映射都放在业务层：
-// 读帧 → 验 loginToken → dispatch（内含事务和 requestToken 链）→ Flush。
+// handler 把传输、token、错误映射都放在业务层：
+// 读帧 → dispatch（按处理函数的 session 类型认证、开事务、维护 requestToken 链）→ Flush。
 func handler(log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		s := appsession.New(httpserver.NewSession(w, log), r.Header.Get(hdrReqToken))
+		s := appsession.New(httpserver.NewSession(w, log), bearer(r), r.Header.Get(hdrReqToken))
 
 		var typeId int32
 		defer func() {
@@ -94,15 +93,6 @@ func handler(log *slog.Logger) http.HandlerFunc {
 		if err != nil {
 			writeError(w, log, 0, 0, fmt.Errorf("%w: %w", errBadFrame, err))
 			return
-		}
-
-		if mode, ok := processModes[typeId]; ok && mode != processNone {
-			uid, err := redis.VerifyLoginToken(r.Context(), bearer(r))
-			if err != nil {
-				writeError(w, log, typeId, 0, err)
-				return
-			}
-			s.SetUID(uid)
 		}
 
 		if err := processRegistry.Dispatch(r.Context(), typeId, payload, s); err != nil {

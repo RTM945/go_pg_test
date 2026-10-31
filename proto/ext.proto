@@ -5,6 +5,7 @@ import "google/protobuf/descriptor.proto";
 option go_package = "go_pg_test/genpb/common;commonpb";
 
 // 扩展 MessageOptions，让每个 message 都可以打一个 type_id 标签。
+// genpb 给打了标签的 message 生成协议号常量和 TypeId() 方法，生成的类型本身就能收发。
 //
 // type_id 全局唯一——跨 app 也不许重复，因为网关/跨服转发时同一个号在两处
 // 含义不同就是灾难。按号段人工分配：
@@ -14,6 +15,11 @@ option go_package = "go_pg_test/genpb/common;commonpb";
 //
 // 号段只是约定，生成器不强制，只查重复：撞了 go run ./cmd/genpb 会直接报错
 // 并指出是哪两个 message 撞的。
+//
+// 客户端发给服务端的协议以 C 开头：genpb 为它们生成处理函数的脚手架并自动注册。
+//
+// 这里只放协议本身的事。处理方式（认证、事务、锁）是服务端怎么访问数据库，
+// 由处理函数 session 参数的类型决定，不写进协议。
 extend google.protobuf.MessageOptions {
   int32 type_id = 51234;
 }

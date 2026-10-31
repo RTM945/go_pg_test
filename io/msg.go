@@ -1,11 +1,12 @@
 package io
 
+// Msg 是一条协议消息。protoc-gen-go 生成的类型，加上 vtprotobuf 的编解码方法和
+// genpb 生成的 TypeId（genpb/<app>/protocol_types.go），本身就满足它，不用再包一层。
 type Msg interface {
-	SetSession(session Session)
-	Session() Session
+	// TypeId 是协议号，写在帧头。
 	TypeId() int32
-	// Size 是 Write 需要的缓冲区大小，编码前就得知道。
-	Size() int
-	Read(buffer []byte) error
-	Write(buffer []byte) (int, error)
+	SizeVT() int
+	// MarshalToSizedBufferVT 从 dAtA 的末尾往前写，len(dAtA) 必须正好是 SizeVT()。
+	MarshalToSizedBufferVT(dAtA []byte) (int, error)
+	UnmarshalVT(dAtA []byte) error
 }

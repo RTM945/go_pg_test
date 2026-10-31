@@ -11,9 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"go_pg_test/app/test/msg"
+	appsession "go_pg_test/app/test/session"
 	"go_pg_test/common/dispatch"
 	"go_pg_test/common/redis"
+	testpb "go_pg_test/genpb/test"
 	"go_pg_test/io"
 )
 
@@ -88,9 +89,9 @@ func TestWriteError(t *testing.T) {
 // TestHandlerRecoversPanic 业务 panic 回 500 INTERNAL，而不是让 net/http 掐断连接。
 func TestHandlerRecoversPanic(t *testing.T) {
 	const typeId int32 = 9001
-	register(processRegistry, typeId, msg.NewHeartbeat, func(context.Context, *msg.Heartbeat) error {
+	processRegistry.Register(typeId, func(context.Context, int32, []byte, *appsession.Session) error {
 		panic("boom")
-	}, processNone)
+	})
 
 	if w := serve(t, typeId, nil); w.Code != http.StatusInternalServerError || w.Header().Get(hdrErrCode) != "INTERNAL" {
 		t.Fatalf("期望 500 INTERNAL，实际 %d %s", w.Code, w.Header().Get(hdrErrCode))
@@ -110,12 +111,28 @@ func TestHandlerRejectsBadRequests(t *testing.T) {
 	}
 }
 
-// TestRegisterRejectsMistakes 模式不认识、协议号登记两次，启动时就 panic。
-func TestRegisterRejectsMistakes(t *testing.T) {
-	reg := dispatch.NewProcessorRegistry()
-	noop := func(context.Context, *msg.Heartbeat) error { return nil }
+// TestHandleRejectsDuplicates 同一个协议登记两次，启动时就 panic。
+// 处理方式写错（session 参数不是 Guest/Auth/User）是编译错误，不用测。
+func TestHandleRejectsDuplicates(t *testing.T) {
+	reg := appsession.NewRegistry()
+	noop := func(context.Context, *appsession.Guest, *testpb.CHeartbeat) error { return nil }
 
-	mustPanic(t, func() { register(reg, 9100, msg.NewHeartbeat, noop, processMode(99)) })
-	register(reg, 9101, msg.NewHeartbeat, noop, processNone)
-	mustPanic(t, func() { register(reg, 9101, msg.NewHeartbeat, noop, processNone) })
+	reg.Handle(noop)
+	mustPanic(t, func() { reg.Handle(noop) })
+}
+
+// TestHandlerAuthenticatesBeforeDecoding 要认证的协议没带 loginToken 就是 401，payload 再坏也不解码；
+// 不认证的协议（登录）才会因为 payload 坏回 400。两种都在碰 Redis 和数据库之前结束。
+func TestHandlerAuthenticatesBeforeDecoding(t *testing.T) {
+	garbage := []byte{0xff, 0xff, 0xff} // 没写完的 varint
+
+	if w := serve(t, testpb.PROTOCOL_TYPE_CMails, garbage); w.Code != http.StatusUnauthorized || w.Header().Get(hdrErrCode) != "TOKEN_EXPIRED" {
+		t.Fatalf("session.User 没带 token 期望 401 TOKEN_EXPIRED，实际 %d %s", w.Code, w.Header().Get(hdrErrCode))
+	}
+	if w := serve(t, testpb.PROTOCOL_TYPE_CHeartbeat, garbage); w.Code != http.StatusUnauthorized {
+		t.Fatalf("session.Auth 没带 token 期望 401，实际 %d %s", w.Code, w.Header().Get(hdrErrCode))
+	}
+	if w := serve(t, testpb.PROTOCOL_TYPE_CLogin, garbage); w.Code != http.StatusBadRequest || w.Header().Get(hdrErrCode) != "BAD_PAYLOAD" {
+		t.Fatalf("session.Guest payload 坏期望 400 BAD_PAYLOAD，实际 %d %s", w.Code, w.Header().Get(hdrErrCode))
+	}
 }

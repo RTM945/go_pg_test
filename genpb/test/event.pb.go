@@ -24,26 +24,26 @@ const (
 
 // 客户端主动拉取各子系统的版本号。
 // 客户端本地保存一份 map，比较后只同步发生变化的类型。
-type PollEvents struct {
+type CPollEvents struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PollEvents) Reset() {
-	*x = PollEvents{}
+func (x *CPollEvents) Reset() {
+	*x = CPollEvents{}
 	mi := &file_test_event_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PollEvents) String() string {
+func (x *CPollEvents) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PollEvents) ProtoMessage() {}
+func (*CPollEvents) ProtoMessage() {}
 
-func (x *PollEvents) ProtoReflect() protoreflect.Message {
+func (x *CPollEvents) ProtoReflect() protoreflect.Message {
 	mi := &file_test_event_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -55,8 +55,8 @@ func (x *PollEvents) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PollEvents.ProtoReflect.Descriptor instead.
-func (*PollEvents) Descriptor() ([]byte, []int) {
+// Deprecated: Use CPollEvents.ProtoReflect.Descriptor instead.
+func (*CPollEvents) Descriptor() ([]byte, []int) {
 	return file_test_event_proto_rawDescGZIP(), []int{0}
 }
 
@@ -168,9 +168,8 @@ var File_test_event_proto protoreflect.FileDescriptor
 
 const file_test_event_proto_rawDesc = "" +
 	"\n" +
-	"\x10test/event.proto\x1a\text.proto\"\x12\n" +
-	"\n" +
-	"PollEvents:\x04\x90\x82\x19i\":\n" +
+	"\x10test/event.proto\x1a\text.proto\"\x13\n" +
+	"\vCPollEvents:\x04\x90\x82\x19i\":\n" +
 	"\fEventVersion\x12\x16\n" +
 	"\x06global\x18\x01 \x01(\x03R\x06global\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\x03R\x04user\"\x9b\x01\n" +
@@ -194,7 +193,7 @@ func file_test_event_proto_rawDescGZIP() []byte {
 
 var file_test_event_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_test_event_proto_goTypes = []any{
-	(*PollEvents)(nil),    // 0: PollEvents
+	(*CPollEvents)(nil),   // 0: CPollEvents
 	(*EventVersion)(nil),  // 1: EventVersion
 	(*EventVersions)(nil), // 2: EventVersions
 	nil,                   // 3: EventVersions.VersionsEntry

@@ -98,7 +98,7 @@ func PublishGlobal(ctx context.Context, uuid string, in GlobalMail) (mailID int6
 }
 
 // SendPrivate 直接给一个玩家投递邮件。只 bump 这个玩家的定向版本，
-// 其他玩家的 PollEvents 看不到变化，因此不会去拉 CMails。
+// 其他玩家的 CPollEvents 看不到变化，因此不会去拉 CMails。
 func SendPrivate(ctx context.Context, uid int64, params, awardList string) (mailID, eventSeq int64, err error) {
 	var bumpErr error
 	err = db.WithUserLock(ctx, uid, func(ctx context.Context) error {

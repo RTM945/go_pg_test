@@ -1,57 +1,34 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"testing"
-
-	"go_pg_test/io"
 )
 
-type testMsg struct {
-	session io.Session
-	typeId  int32
-	payload []byte
-}
-
-func (m *testMsg) SetSession(s io.Session)     { m.session = s }
-func (m *testMsg) Session() io.Session         { return m.session }
-func (m *testMsg) TypeId() int32               { return m.typeId }
-func (m *testMsg) Size() int                   { return len(m.payload) }
-func (m *testMsg) Read(b []byte) error         { m.payload = append(m.payload[:0], b...); return nil }
-func (m *testMsg) Write(b []byte) (int, error) { return copy(b, m.payload), nil }
-
+// fakeSession 注册表不关心 session 是什么类型，原样交给处理函数。
 type fakeSession struct {
 	uid int64
 }
 
-func (s *fakeSession) Logger() *slog.Logger { return slog.New(slog.DiscardHandler) }
-func (s *fakeSession) UID() int64           { return s.uid }
-func (s *fakeSession) SetUID(uid int64)     { s.uid = uid }
-func (s *fakeSession) Write(io.Msg) error   { return nil }
-func (s *fakeSession) PendingFrames() int   { return 0 }
-func (s *fakeSession) Flush() error         { return nil }
-
 func TestRegisterAndDispatch(t *testing.T) {
-	reg := NewProcessorRegistry()
+	reg := NewProcessorRegistry[*fakeSession]()
 	const typeId int32 = 101
 	called := false
 
-	reg.Register(typeId, func(_ context.Context, gotTypeId int32, payload []byte, session io.Session) error {
+	reg.Register(typeId, func(_ context.Context, gotTypeId int32, payload []byte, session *fakeSession) error {
 		called = true
 		if gotTypeId != typeId {
 			t.Errorf("typeId = %d, want %d", gotTypeId, typeId)
 		}
-		if session.UID() != 7 {
-			t.Errorf("uid = %d, want 7", session.UID())
+		if session.uid != 7 {
+			t.Errorf("uid = %d, want 7", session.uid)
 		}
-		msg := &testMsg{typeId: typeId}
-		if err := msg.Read(payload); err != nil {
-			return err
+		if !bytes.Equal(payload, []byte{0x08, 0x2a}) {
+			t.Errorf("payload = %x, want 082a", payload)
 		}
-		msg.SetSession(session)
 		return nil
 	})
 
@@ -64,7 +41,7 @@ func TestRegisterAndDispatch(t *testing.T) {
 }
 
 func TestDispatchUnknownTypeId(t *testing.T) {
-	reg := NewProcessorRegistry()
+	reg := NewProcessorRegistry[*fakeSession]()
 	err := reg.Dispatch(t.Context(), 999, nil, &fakeSession{})
 	if !errors.Is(err, ErrUnknownTypeId) {
 		t.Errorf("Dispatch() error = %v, want ErrUnknownTypeId", err)
@@ -73,8 +50,8 @@ func TestDispatchUnknownTypeId(t *testing.T) {
 
 // TestRegisterTwicePanics 同一个协议号登记两次直接 panic，不让后登记的悄悄覆盖。
 func TestRegisterTwicePanics(t *testing.T) {
-	reg := NewProcessorRegistry()
-	noop := func(context.Context, int32, []byte, io.Session) error { return nil }
+	reg := NewProcessorRegistry[*fakeSession]()
+	noop := func(context.Context, int32, []byte, *fakeSession) error { return nil }
 	reg.Register(101, noop)
 
 	defer func() {

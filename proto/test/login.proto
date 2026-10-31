@@ -6,7 +6,7 @@ option go_package = "go_pg_test/genpb/test;testpb";
 
 import "ext.proto";
 
-message Login {
+message CLogin {
   option (proto.type_id) = 101;
 
   string plat = 1;

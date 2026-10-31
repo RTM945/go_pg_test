@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"go_pg_test/app/test/msg"
+	testpb "go_pg_test/genpb/test"
 	"go_pg_test/io"
 )
 
@@ -43,17 +43,18 @@ func ensureLogin(t *testing.T) {
 		return
 	}
 
-	login := msg.NewLogin()
-	login.Plat = "test"
-	login.Account = fmt.Sprintf("live-%d", time.Now().UnixNano())
-	login.ClientVersion = "live"
-	login.Ext = map[int32]string{5: "live-device"}
+	login := &testpb.CLogin{
+		Plat:          "test",
+		Account:       fmt.Sprintf("live-%d", time.Now().UnixNano()),
+		ClientVersion: "live",
+		Ext:           map[int32]string{5: "live-device"},
+	}
 
-	var frame bytes.Buffer
-	if err := io.WriteFrame(&frame, login.TypeId(), marshal(t, login)); err != nil {
+	frame, err := io.AppendMsg(nil, login)
+	if err != nil {
 		t.Fatalf("拼登录帧失败: %v", err)
 	}
-	httpReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, liveAddr+"/", &frame)
+	httpReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, liveAddr+"/", bytes.NewReader(frame))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +82,8 @@ func ensureLogin(t *testing.T) {
 	if len(frames) == 0 {
 		t.Fatal("登录响应没有 LoginResult")
 	}
-	result := msg.NewLoginResult()
-	if err := result.Read(frames[0].Payload); err != nil {
+	result := &testpb.LoginResult{}
+	if err := result.UnmarshalVT(frames[0].Payload); err != nil {
 		t.Fatalf("LoginResult 解不出来: %v", err)
 	}
 	liveSession.ready = true
@@ -95,11 +96,8 @@ func Test_CRedEnvelopeClick(t *testing.T) {
 	actId := int32(42)
 	// ↑↑↑ 填参数
 
-	req := msg.NewCRedEnvelopeClick()
-	req.ActId = actId
-
-	resp := msg.NewSRedEnvelope()
-	roundTrip(t, req, resp)
+	resp := &testpb.SRedEnvelope{}
+	roundTrip(t, &testpb.CRedEnvelopeClick{ActId: actId}, resp)
 
 	t.Logf("%v", resp)
 }
@@ -110,11 +108,8 @@ func Test_CRedEnvelope(t *testing.T) {
 	actId := int32(42)
 	// ↑↑↑ 填参数
 
-	req := msg.NewCRedEnvelope()
-	req.ActId = actId
-
-	resp := msg.NewSRedEnvelope()
-	roundTrip(t, req, resp)
+	resp := &testpb.SRedEnvelope{}
+	roundTrip(t, &testpb.CRedEnvelope{ActId: actId}, resp)
 
 	t.Logf("%v", resp)
 }
@@ -124,15 +119,14 @@ func roundTrip(t *testing.T, req, resp io.Msg) {
 	t.Helper()
 	ensureLogin(t)
 
-	payload := marshal(t, req)
-	var frame bytes.Buffer
-	if err := io.WriteFrame(&frame, req.TypeId(), payload); err != nil {
+	frame, err := io.AppendMsg(nil, req)
+	if err != nil {
 		t.Fatalf("拼帧失败: %v", err)
 	}
 
-	t.Logf("→ %T typeId=%d payload=%s", req, req.TypeId(), hex.EncodeToString(payload))
+	t.Logf("→ %T typeId=%d payload=%s", req, req.TypeId(), hex.EncodeToString(frame[io.FrameHeaderSize:]))
 
-	httpReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, liveAddr+"/", &frame)
+	httpReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, liveAddr+"/", bytes.NewReader(frame))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,19 +164,8 @@ func roundTrip(t *testing.T, req, resp io.Msg) {
 		t.Logf("← [%d/%d] typeId=%d payload=%s", i+1, len(frames), f.TypeId, hex.EncodeToString(f.Payload))
 	}
 
-	if err := resp.Read(frames[0].Payload); err != nil {
+	if err := resp.UnmarshalVT(frames[0].Payload); err != nil {
 		t.Fatalf("响应解不出 %T: %v，字节 %s", resp, err, hex.EncodeToString(frames[0].Payload))
 	}
 	t.Logf("%v", resp)
-}
-
-func marshal(t *testing.T, m io.Msg) []byte {
-	t.Helper()
-
-	buf := make([]byte, m.Size())
-	n, err := m.Write(buf)
-	if err != nil {
-		t.Fatalf("编码 %T 失败: %v", m, err)
-	}
-	return buf[:n]
 }

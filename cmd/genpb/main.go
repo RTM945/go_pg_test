@@ -24,10 +24,16 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-func main() {
-	// gen proto
-	vtFeatures := "marshal+unmarshal+size+pool"
+// vtFeatures 不开 pool：没有消息标 mempool，交给处理函数的消息也不该回池——函数返回后谁还拿着它说不清。
+const vtFeatures = "marshal+unmarshal+size"
 
+// plugins 是 protoc 要用的插件。它们都在 go.mod 的依赖里，版本跟着 go.mod 走（见 buildPlugins）。
+var plugins = []struct{ name, pkg string }{
+	{"protoc-gen-go", "google.golang.org/protobuf/cmd/protoc-gen-go"},
+	{"protoc-gen-go-vtproto", "github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto"},
+}
+
+func main() {
 	wd, _ := os.Getwd()
 	repoRoot, err := findRepoRoot(wd)
 	if err != nil {
@@ -41,22 +47,15 @@ func main() {
 
 	// protoc 的产物（genpb/**/*.pb.go、desc.pb）由 protoc 自己写、自己覆盖，
 	// 失败时它不会删旧文件，genpb 不碰它们。
-	// genpb 只负责自己模板产出的部分（app/msg、注册表、protocol_types.go）：
+	// genpb 只负责自己模板产出的部分（logic 脚手架、注册表、protocol_types.go）：
 	// 这些先留在内存里，等所有生成步骤都成功了再统一落盘，
 	// 生成失败时仓库里的旧代码原封不动。
 	// go_pg_test/proto，所有 proto 共用的 -I 根
 	protoRoot := filepath.Join(repoRoot, "proto")
-	// protoc 的产物直接落到仓库，落哪个子目录由每个 proto 的 go_package 决定
-	// （protoc 的 paths=import + module= 会自己剥掉 module 前缀）
-	outRoot := repoRoot
 	desc := filepath.Join(repoRoot, "genpb", "desc.pb")
 	if err := os.MkdirAll(filepath.Dir(desc), 0o755); err != nil {
 		log.Fatal("create genpb dir:", err)
 	}
-	// protoc include
-	protocInclude := filepath.Join(repoRoot, "third_party", "protoc", "include")
-	// vt include
-	vtInclude := filepath.Join(repoRoot, "third_party", "vtprotobuf", "include")
 
 	protoFiles, err := collectProtoFiles(protoRoot)
 	if err != nil {
@@ -71,117 +70,14 @@ func main() {
 		log.Println(" -", p)
 	}
 
-	gobin, err := goEnv("GOBIN")
+	pluginDir, err := buildPlugins(repoRoot)
 	if err != nil {
-		log.Printf("go env GOBIN: %v", err)
+		log.Fatal("buildPlugins:", err)
 	}
-	if gobin == "" {
-		// fallback to GOPATH/bin
-		gopath, err := goEnv("GOPATH")
-		if err != nil {
-			log.Printf("go env GOPATH: %v", err)
-		}
-		gobin = filepath.Join(gopath, "bin")
-	}
-
-	ext := ""
-	if runtime.GOOS == "windows" {
-		ext = ".exe"
-	}
-	pGo := filepath.Join(gobin, "protoc-gen-go"+ext)
-	pGrpc := filepath.Join(gobin, "protoc-gen-go-grpc"+ext)
-	pVt := filepath.Join(gobin, "protoc-gen-go-vtproto"+ext)
-
-	missing := []struct {
-		path   string
-		modPkg string
-		binary string
-	}{
-		{pGo, "google.golang.org/protobuf/cmd/protoc-gen-go@latest", "protoc-gen-go"},
-		{pGrpc, "google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest", "protoc-gen-go-grpc"},
-		{pVt, "github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@latest", "protoc-gen-go-vtproto"},
-	}
-
-	for i := range missing {
-		if !fileExists(missing[i].path) {
-			log.Printf("Installing %s ...\n", missing[i].binary)
-			if err := goInstall(missing[i].modPkg); err != nil {
-				log.Printf("failed to install %s: %v\n", missing[i].binary, err)
-				// continue and try PATH later
-			} else {
-				// recompute from gobin
-				missing[i].path = filepath.Join(gobin, missing[i].binary+ext)
-			}
-		}
-	}
-
-	for _, m := range missing {
-		if !fileExists(m.path) {
-			// try to resolve from PATH
-			p, _ := exec.LookPath(m.binary + ext)
-			if p == "" {
-				log.Printf("warning: plugin %s not found (expected at %s). protoc may fail.\n", m.binary, m.path)
-			} else {
-				log.Printf("Found %s in PATH: %s\n", m.binary, p)
-				// override
-				switch m.binary {
-				case "protoc-gen-go":
-					pGo = p
-				case "protoc-gen-go-grpc":
-					pGrpc = p
-				case "protoc-gen-go-vtproto":
-					pVt = p
-				}
-			}
-		}
-	}
-	// 构建 protoc 参数
-	args := []string{
-		"-I.", // protoRoot 下为根
-		"-I" + protocInclude,
-		"-I" + vtInclude,
-		"--include_imports",
-		"--include_source_info",
-	}
-
-	// plugin flags
-	if fileExists(pGo) {
-		args = append(args, fmt.Sprintf("--plugin=protoc-gen-go=%s", pGo))
-	}
-	if fileExists(pGrpc) {
-		args = append(args, fmt.Sprintf("--plugin=protoc-gen-go-grpc=%s", pGrpc))
-	}
-	if fileExists(pVt) {
-		args = append(args, fmt.Sprintf("--plugin=protoc-gen-go-vtproto=%s", pVt))
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	var outb, errb bytes.Buffer
-	var cmd *exec.Cmd
-
-	// outputs：paths=import + module=，让每个 proto 的 go_package 自己决定落到
-	// 哪个 Go 包。module= 和 paths=source_relative 互斥，不能混用。
-	args = append(args,
-		fmt.Sprintf("--go_out=%s", outRoot),
-		fmt.Sprintf("--go_opt=module=%s", module),
-		fmt.Sprintf("--go-grpc_out=%s", outRoot),
-		fmt.Sprintf("--go-grpc_opt=module=%s", module),
-		fmt.Sprintf("--go-vtproto_out=%s", outRoot),
-		fmt.Sprintf("--go-vtproto_opt=module=%s", module),
-		fmt.Sprintf("--go-vtproto_opt=features=%s", vtFeatures),
-	)
-
-	args = append(args, fmt.Sprintf("--descriptor_set_out=%s", desc))
-
-	// append proto files (absolute or relative)
-	args = append(args, protoFiles...)
-	cmd = exec.CommandContext(ctx, repoRoot+"/bin/protoc", args...)
-	cmd.Dir = protoRoot
-	cmd.Stdout = &outb
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
-		log.Fatalf("*** protoc failed:\nSTDOUT:\n%s\nSTDERR:\n%s\n", outb.String(), errb.String())
+	err = runProtoc(repoRoot, protoRoot, module, desc, pluginDir, protoFiles)
+	_ = os.RemoveAll(pluginDir) // log.Fatal 不跑 defer，所以在这里删
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// map<message, typeId>
@@ -208,7 +104,7 @@ func main() {
 		outputs = append(outputs, f)
 	}
 
-	// app 侧：msg 包装类、logic 脚手架、注册表
+	// app 侧：logic 脚手架、注册表
 	protos, err := collectAppProtoFiles(files, module, typeIDExtType)
 	if err != nil {
 		log.Fatal("collectAppProtoFiles:", err)
@@ -259,14 +155,14 @@ func publishGenerated(repoRoot string, files []generatedFile) error {
 //
 // 只碰非 protoc 产物：
 //
-//	app/<app>/msg/                    协议包装类
 //	app/<app>/processor_registry.gen.go
 //
 // 刻意不碰的：
 //
 //	genpb/                            里面的 *.pb.go、*_vtproto.pb.go、desc.pb
 //	                                  是 protoc 的产物，由 protoc 自己覆盖；
-//	                                  genpb 删它们只会让生成失败时整个仓库编不过
+//	                                  genpb 删它们只会让生成失败时整个仓库编不过。
+//	                                  protocol_types.go 也在这里，每次整份重写，不用先删
 //	app/<app>/logic/                  msg_*.go 里是人写的业务逻辑
 //	app/<app>/ptable/                 pdbgen 的产出，不是我们的地盘
 //
@@ -283,12 +179,7 @@ func cleanGenerated(repoRoot string) error {
 		if !app.IsDir() {
 			continue
 		}
-		appDir := filepath.Join(repoRoot, "app", app.Name())
-
-		if err := os.RemoveAll(filepath.Join(appDir, "msg")); err != nil {
-			return err
-		}
-		registry := filepath.Join(appDir, "processor_registry.gen.go")
+		registry := filepath.Join(repoRoot, "app", app.Name(), "processor_registry.gen.go")
 		if err := os.Remove(registry); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -302,11 +193,16 @@ const protocolTypesTmpl = `// Code generated by genpb; DO NOT EDIT.
 
 package {{.GoPackage}}
 
+// 每个打了 (proto.type_id) 的 message 一个协议号常量和一个 TypeId 方法。
+// 加上 vtprotobuf 生成的编解码方法，这些类型本身就是 io.Msg：直接 &{{.GoPackage}}.X{...} 构造、发送。
+
 {{range .TypeIds}}
 const PROTOCOL_TYPE_{{.Name}} int32 = {{.TypeId}}
+
+func (*{{.Name}}) TypeId() int32 { return PROTOCOL_TYPE_{{.Name}} }
 {{end}}`
 
-// renderProtocolTypes 把一个 go_package 下的协议号常量渲染进内存。
+// renderProtocolTypes 把一个 go_package 下的协议号常量和 TypeId 方法渲染进内存。
 // 每个 app 一份，互不污染——app 编译时不会链到别人的协议号。
 func renderProtocolTypes(repoRoot, module string, g *typeIdGroup) (generatedFile, error) {
 	rel, ok := strings.CutPrefix(g.GoImportPath, module+"/")
@@ -336,29 +232,69 @@ func modulePath(goModPath string) (string, error) {
 	return "", fmt.Errorf("%s: no module line found", goModPath)
 }
 
-func goEnv(name string) (string, error) {
-	cmd := exec.Command("go", "env", name)
-	out, err := cmd.Output()
+// buildPlugins 在一个临时目录里按 go.mod 的版本编出 protoc 插件，返回这个目录，用完由调用方删掉。
+//
+// 不用 go install @latest：装到的 protoc-gen-go 可能比 go.mod 里的 protobuf 运行时新，
+// 生成的代码会用到运行时还没有的东西；换一台机器，生成结果也可能不一样。
+// 第二次起 go build 走构建缓存，只剩链接。
+func buildPlugins(repoRoot string) (string, error) {
+	dir, err := os.MkdirTemp("", "genpb-plugins-")
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func fileExists(path string) bool {
-	if path == "" {
-		return false
+	args := []string{"build", "-o", dir}
+	for _, p := range plugins {
+		args = append(args, p.pkg)
 	}
-	_, err := os.Stat(path)
-	return err == nil
+	cmd := exec.Command("go", args...)
+	cmd.Dir = repoRoot
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("go build %v: %w", args[3:], err)
+	}
+	return dir, nil
 }
 
-func goInstall(mod string) error {
-	// run: go install <mod>
-	cmd := exec.Command("go", "install", mod)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+// runProtoc 跑一遍 protoc：*.pb.go、*_vtproto.pb.go 落进仓库，desc.pb 留给后面的生成步骤。
+func runProtoc(repoRoot, protoRoot, module, desc, pluginDir string, protoFiles []string) error {
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
+	args := []string{
+		"-I.", // protoRoot 下为根
+		"-I" + filepath.Join(repoRoot, "third_party", "protoc", "include"),
+		"-I" + filepath.Join(repoRoot, "third_party", "vtprotobuf", "include"),
+		"--include_imports",
+		"--include_source_info",
+	}
+	for _, p := range plugins {
+		args = append(args, fmt.Sprintf("--plugin=%s=%s", p.name, filepath.Join(pluginDir, p.name+exe)))
+	}
+	// 产物直接落到仓库，落哪个子目录由每个 proto 的 go_package 决定：
+	// paths=import + module= 会自己剥掉 module 前缀。module= 和 paths=source_relative 互斥，不能混用。
+	args = append(args,
+		"--go_out="+repoRoot,
+		"--go_opt=module="+module,
+		"--go-vtproto_out="+repoRoot,
+		"--go-vtproto_opt=module="+module,
+		"--go-vtproto_opt=features="+vtFeatures,
+		"--descriptor_set_out="+desc,
+	)
+	args = append(args, protoFiles...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	var outb, errb bytes.Buffer
+	cmd := exec.CommandContext(ctx, filepath.Join(repoRoot, "bin", "protoc"), args...)
+	cmd.Dir = protoRoot
+	cmd.Stdout = &outb
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("*** protoc failed: %w\nSTDOUT:\n%s\nSTDERR:\n%s", err, outb.String(), errb.String())
+	}
+	return nil
 }
 
 func findRepoRoot(start string) (string, error) {
@@ -454,6 +390,27 @@ func hasTypeId(opts protoreflect.ProtoMessage, extType protoreflect.ExtensionTyp
 	return opts.ProtoReflect().Has(extType.TypeDescriptor())
 }
 
+// typeIdField 找出会生成 Go 字段 TypeId 的字段或 oneof，没有就返回空串。
+// protoc-gen-go 把 type_id、typeId 都转成 TypeId；这里忽略大小写和下划线来比，宁可多拦。
+func typeIdField(msg protoreflect.MessageDescriptor) string {
+	collides := func(name protoreflect.Name) bool {
+		return strings.EqualFold(strings.ReplaceAll(string(name), "_", ""), "typeid")
+	}
+	fields := msg.Fields()
+	for i := range fields.Len() {
+		if f := fields.Get(i); collides(f.Name()) {
+			return string(f.Name())
+		}
+	}
+	oneofs := msg.Oneofs()
+	for i := range oneofs.Len() {
+		if o := oneofs.Get(i); collides(o.Name()) {
+			return string(o.Name())
+		}
+	}
+	return ""
+}
+
 // collectTypeIds 收集所有打了 (proto.type_id) 的 message，按 typeId 升序返回。
 //
 // type_id 撞车和 message 重名都是致命的，这里直接报错而不是放过去：
@@ -461,6 +418,8 @@ func hasTypeId(opts protoreflect.ProtoMessage, extType protoreflect.ExtensionTyp
 //     常量还会被静默吞掉，全程没有任何提示。
 //   - message 重名：生成的 PROTOCOL_TYPE_<Name> 会重复，编译器在生成文件里
 //     报 redeclared，看不出是谁和谁撞了。
+//   - 字段生成出来叫 TypeId（type_id、typeId）：和生成的 TypeId() 方法重名，
+//     编译器在生成文件里报 "field and method with the same name"。
 func collectTypeIds(files *protoregistry.Files, typeIDExtType protoreflect.ExtensionType) ([]*typeIdGroup, error) {
 	byTypeId := make(map[int32]*msg2typeId)
 	byName := make(map[string]*msg2typeId)
@@ -474,7 +433,7 @@ func collectTypeIds(files *protoregistry.Files, typeIDExtType protoreflect.Exten
 		var g *typeIdGroup
 
 		messages := fd.Messages()
-		for i := 0; i < messages.Len(); i++ {
+		for i := range messages.Len() {
 			msg := messages.Get(i)
 			opts := msg.Options()
 			if opts == nil || !hasTypeId(opts, typeIDExtType) {
@@ -505,6 +464,10 @@ func collectTypeIds(files *protoregistry.Files, typeIDExtType protoreflect.Exten
 			}
 			if prev, ok := byName[name]; ok {
 				fail = fmt.Errorf("duplicate message name %s: %s and %s would both generate PROTOCOL_TYPE_%s", name, prev.where, where, name)
+				return false
+			}
+			if field := typeIdField(msg); field != "" {
+				fail = fmt.Errorf("%s: field %s becomes Go field TypeId, which collides with the generated TypeId() method; rename the field", where, field)
 				return false
 			}
 

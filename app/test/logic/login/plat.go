@@ -8,7 +8,7 @@ type PlatformVerifier interface {
 	Verify(ctx context.Context, account string, ext map[int32]string) (platformUID string, err error)
 }
 
-var verifiers = map[string]PlatformVerifier{} // key 是 msg.Plat，启动时注册
+var verifiers = map[string]PlatformVerifier{} // key 是 CLogin.Plat，启动时注册
 
 type TestPlatform struct {
 }

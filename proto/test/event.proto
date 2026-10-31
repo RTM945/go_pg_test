@@ -6,7 +6,7 @@ import "ext.proto";
 
 // 客户端主动拉取各子系统的版本号。
 // 客户端本地保存一份 map，比较后只同步发生变化的类型。
-message PollEvents {
+message CPollEvents {
   option (proto.type_id) = 105;
 }
 

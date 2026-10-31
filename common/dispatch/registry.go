@@ -3,8 +3,6 @@ package dispatch
 import (
 	"context"
 	"fmt"
-
-	"go_pg_test/io"
 )
 
 // Kind 是告诉客户端的错误类别。业务层只说是哪一类，怎么表达（HTTP 状态码）由传输层决定。
@@ -51,29 +49,29 @@ var (
 	ErrMalformedPayload = NewClientError(BadRequest, "BAD_PAYLOAD", "malformed protocol payload")
 )
 
-// DispatchFunc 一次协议分发：typeId、原始 payload、Session 都已就绪。
-type DispatchFunc func(ctx context.Context, typeId int32, buffer []byte, session io.Session) error
+// DispatchFunc 一次协议分发：typeId、原始 payload、session 都已就绪。S 是 app 自己的 session 类型。
+type DispatchFunc[S any] func(ctx context.Context, typeId int32, buffer []byte, session S) error
 
 // ProcessorRegistry 只做 typeId -> handler 的登记和分发。
 // 事务、锁、认证、token 都由业务层在注册 handler 时自己包。
-type ProcessorRegistry struct {
-	registry map[int32]DispatchFunc
+type ProcessorRegistry[S any] struct {
+	registry map[int32]DispatchFunc[S]
 }
 
-func NewProcessorRegistry() *ProcessorRegistry {
-	return &ProcessorRegistry{registry: make(map[int32]DispatchFunc)}
+func NewProcessorRegistry[S any]() *ProcessorRegistry[S] {
+	return &ProcessorRegistry[S]{registry: make(map[int32]DispatchFunc[S])}
 }
 
 // Register 登记一个协议号。同一个协议号登记两次直接 panic：后登记的会悄悄覆盖先登记的，
 // 谁生效取决于 init 的执行顺序。
-func (p *ProcessorRegistry) Register(typeId int32, fn DispatchFunc) {
+func (p *ProcessorRegistry[S]) Register(typeId int32, fn DispatchFunc[S]) {
 	if _, ok := p.registry[typeId]; ok {
 		panic(fmt.Sprintf("dispatch: typeId %d registered twice", typeId))
 	}
 	p.registry[typeId] = fn
 }
 
-func (p *ProcessorRegistry) Dispatch(ctx context.Context, typeId int32, buffer []byte, session io.Session) error {
+func (p *ProcessorRegistry[S]) Dispatch(ctx context.Context, typeId int32, buffer []byte, session S) error {
 	fn, ok := p.registry[typeId]
 	if !ok {
 		return fmt.Errorf("%w: %d", ErrUnknownTypeId, typeId)
