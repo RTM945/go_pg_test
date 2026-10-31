@@ -25,27 +25,27 @@ const (
 // 心跳只负责保活：服务端验 loginToken（顺带续 Redis TTL），
 // 不开事务、不消费 requestToken、不查业务表。
 //
-// 响应体是空的；事件请通过 PollEvents 拉取，不走心跳。
-type Heartbeat struct {
+// 响应体是空的；事件请通过 CPollEvents 拉取，不走心跳。
+type CHeartbeat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Heartbeat) Reset() {
-	*x = Heartbeat{}
+func (x *CHeartbeat) Reset() {
+	*x = CHeartbeat{}
 	mi := &file_test_heartbeat_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Heartbeat) String() string {
+func (x *CHeartbeat) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Heartbeat) ProtoMessage() {}
+func (*CHeartbeat) ProtoMessage() {}
 
-func (x *Heartbeat) ProtoReflect() protoreflect.Message {
+func (x *CHeartbeat) ProtoReflect() protoreflect.Message {
 	mi := &file_test_heartbeat_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -57,8 +57,8 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
-func (*Heartbeat) Descriptor() ([]byte, []int) {
+// Deprecated: Use CHeartbeat.ProtoReflect.Descriptor instead.
+func (*CHeartbeat) Descriptor() ([]byte, []int) {
 	return file_test_heartbeat_proto_rawDescGZIP(), []int{0}
 }
 
@@ -66,8 +66,9 @@ var File_test_heartbeat_proto protoreflect.FileDescriptor
 
 const file_test_heartbeat_proto_rawDesc = "" +
 	"\n" +
-	"\x14test/heartbeat.proto\x1a\text.proto\"\x11\n" +
-	"\tHeartbeat:\x04\x90\x82\x19gB\x1eZ\x1cgo_pg_test/genpb/test;testpbb\x06proto3"
+	"\x14test/heartbeat.proto\x1a\text.proto\"\x12\n" +
+	"\n" +
+	"CHeartbeat:\x04\x90\x82\x19gB\x1eZ\x1cgo_pg_test/genpb/test;testpbb\x06proto3"
 
 var (
 	file_test_heartbeat_proto_rawDescOnce sync.Once
@@ -83,7 +84,7 @@ func file_test_heartbeat_proto_rawDescGZIP() []byte {
 
 var file_test_heartbeat_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_test_heartbeat_proto_goTypes = []any{
-	(*Heartbeat)(nil), // 0: Heartbeat
+	(*CHeartbeat)(nil), // 0: CHeartbeat
 }
 var file_test_heartbeat_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type

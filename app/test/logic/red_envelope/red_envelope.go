@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"go_pg_test/app/test/msg"
 	"go_pg_test/app/test/ptable"
+	testpb "go_pg_test/genpb/test"
 	"go_pg_test/io"
 )
 
@@ -51,12 +51,12 @@ func (e *RedEnvelope) refresh() {
 func (e *RedEnvelope) Online(session io.Session) error {
 	session.Logger().Info("online", "uid", e.Uid(), "actId", e.ActId(), "todayCount", e.TodayCount(), "total", e.Total())
 
-	resp := msg.NewSRedEnvelope()
-	resp.ActId = e.ActId()
-	resp.LastRefreshAt = e.LastRefreshAt()
-	resp.TodayCount = e.TodayCount()
-	resp.Total = e.Total()
-	return session.Write(resp)
+	return session.Write(&testpb.SRedEnvelope{
+		ActId:         e.ActId(),
+		LastRefreshAt: e.LastRefreshAt(),
+		TodayCount:    e.TodayCount(),
+		Total:         e.Total(),
+	})
 }
 
 func (e *RedEnvelope) Click(session io.Session) error {

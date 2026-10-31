@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -64,35 +65,35 @@ func (s *Session) Flush() error {
 	s.pending = nil
 
 	var buf []byte
-	frames := make([]string, 0, len(msgs))
 	for _, msg := range msgs {
-		payload := make([]byte, msg.Size())
-		n, err := msg.Write(payload)
-		if err != nil {
-			return fmt.Errorf("encode typeId %d: %w", msg.TypeId(), err)
-		}
-		if n != len(payload) {
-			// Size() 和实际编出来的长度对不上，发出去的帧会是坏的，宁可不发
-			return fmt.Errorf("encode typeId %d: wrote %d bytes but Size() says %d", msg.TypeId(), n, len(payload))
-		}
-		payload = payload[:n]
-
-		// 经过 slog 的 Resolve：消息实现了 LogValuer 时用它（sensitive 字段打成 "***"）
-		frames = append(frames, fmt.Sprintf("typeId=%d msg=%s", msg.TypeId(), slog.AnyValue(msg).Resolve()))
-		if buf, err = io.AppendFrame(buf, msg.TypeId(), payload); err != nil {
+		var err error
+		if buf, err = io.AppendMsg(buf, msg); err != nil {
 			return err
 		}
 	}
-
-	// 下发多帧时按 batch 日志展开，和 sql batch 一样一眼能看出这次发了什么。
-	if len(frames) == 1 {
-		s.Logger().Debug("send", "typeId", msgs[0].TypeId(), "msg", msgs[0])
-	} else {
-		s.Logger().Debug("send batch", "count", len(frames), "frames", frames)
-	}
+	s.logSend(msgs)
 
 	if _, err := s.w.Write(buf); err != nil {
 		return fmt.Errorf("flush %d frames: %w", len(msgs), err)
 	}
 	return nil
+}
+
+// logSend 打出这次发了哪些协议。格式化消息要走反射，比编码本身贵十几倍
+// （带 20 封邮件的 SMails 要几十微秒），所以只在 debug 打开时才拼。
+// 多帧时按 batch 展开，和 sql batch 一样一眼能看出这次发了什么。
+func (s *Session) logSend(msgs []io.Msg) {
+	log := s.Logger()
+	if !log.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	if len(msgs) == 1 {
+		log.Debug("send", "typeId", msgs[0].TypeId(), "msg", msgs[0])
+		return
+	}
+	frames := make([]string, 0, len(msgs))
+	for _, msg := range msgs {
+		frames = append(frames, fmt.Sprintf("typeId=%d msg=%v", msg.TypeId(), msg))
+	}
+	log.Debug("send batch", "count", len(frames), "frames", frames)
 }

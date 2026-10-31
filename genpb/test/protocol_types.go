@@ -2,28 +2,57 @@
 
 package testpb
 
-const PROTOCOL_TYPE_Login int32 = 101
+// 每个打了 (proto.type_id) 的 message 一个协议号常量和一个 TypeId 方法。
+// 加上 vtprotobuf 生成的编解码方法，这些类型本身就是 io.Msg：直接 &testpb.X{...} 构造、发送。
+
+const PROTOCOL_TYPE_CLogin int32 = 101
+
+func (*CLogin) TypeId() int32 { return PROTOCOL_TYPE_CLogin }
 
 const PROTOCOL_TYPE_LoginResult int32 = 102
 
-const PROTOCOL_TYPE_Heartbeat int32 = 103
+func (*LoginResult) TypeId() int32 { return PROTOCOL_TYPE_LoginResult }
 
-const PROTOCOL_TYPE_PollEvents int32 = 105
+const PROTOCOL_TYPE_CHeartbeat int32 = 103
+
+func (*CHeartbeat) TypeId() int32 { return PROTOCOL_TYPE_CHeartbeat }
+
+const PROTOCOL_TYPE_CPollEvents int32 = 105
+
+func (*CPollEvents) TypeId() int32 { return PROTOCOL_TYPE_CPollEvents }
 
 const PROTOCOL_TYPE_EventVersions int32 = 106
 
+func (*EventVersions) TypeId() int32 { return PROTOCOL_TYPE_EventVersions }
+
 const PROTOCOL_TYPE_CMails int32 = 107
+
+func (*CMails) TypeId() int32 { return PROTOCOL_TYPE_CMails }
 
 const PROTOCOL_TYPE_SMails int32 = 108
 
+func (*SMails) TypeId() int32 { return PROTOCOL_TYPE_SMails }
+
 const PROTOCOL_TYPE_CReadMail int32 = 109
+
+func (*CReadMail) TypeId() int32 { return PROTOCOL_TYPE_CReadMail }
 
 const PROTOCOL_TYPE_CGetAttachment int32 = 110
 
+func (*CGetAttachment) TypeId() int32 { return PROTOCOL_TYPE_CGetAttachment }
+
 const PROTOCOL_TYPE_SGetAttachment int32 = 111
+
+func (*SGetAttachment) TypeId() int32 { return PROTOCOL_TYPE_SGetAttachment }
 
 const PROTOCOL_TYPE_CRedEnvelope int32 = 123
 
+func (*CRedEnvelope) TypeId() int32 { return PROTOCOL_TYPE_CRedEnvelope }
+
 const PROTOCOL_TYPE_SRedEnvelope int32 = 124
 
+func (*SRedEnvelope) TypeId() int32 { return PROTOCOL_TYPE_SRedEnvelope }
+
 const PROTOCOL_TYPE_CRedEnvelopeClick int32 = 125
+
+func (*CRedEnvelopeClick) TypeId() int32 { return PROTOCOL_TYPE_CRedEnvelopeClick }

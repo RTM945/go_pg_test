@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -136,6 +137,34 @@ func TestCollectTypeIds(t *testing.T) {
 	}
 }
 
+// pb 包里每个协议一个常量、一个 TypeId 方法：有了它，pb 类型本身就是 io.Msg。
+func TestRenderProtocolTypes(t *testing.T) {
+	root := t.TempDir()
+	g := &typeIdGroup{
+		GoImportPath: "go_pg_test/genpb/test",
+		GoPackage:    "testpb",
+		TypeIds:      []*msg2typeId{{Name: "CMails", TypeId: 107}, {Name: "SMails", TypeId: 108}},
+	}
+	f, err := renderProtocolTypes(root, "go_pg_test", g)
+	if err != nil {
+		t.Fatalf("renderProtocolTypes() error = %v", err)
+	}
+	if want := filepath.Join(root, "genpb", "test", "protocol_types.go"); f.path != want {
+		t.Errorf("path = %q, want %q", f.path, want)
+	}
+	src := string(f.data)
+	for _, want := range []string{
+		"package testpb",
+		"const PROTOCOL_TYPE_CMails int32 = 107",
+		"func (*CMails) TypeId() int32 { return PROTOCOL_TYPE_CMails }",
+		"func (*SMails) TypeId() int32 { return PROTOCOL_TYPE_SMails }",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("缺 %q\n%s", want, src)
+		}
+	}
+}
+
 // 每个 go_package 一组，协议号常量各写各的包。
 func TestCollectTypeIdsGroupsByPackage(t *testing.T) {
 	files := []*descriptorpb.FileDescriptorProto{
@@ -226,6 +255,27 @@ func TestCollectTypeIdsError(t *testing.T) {
 				},
 			},
 			wantMsg: "duplicate message name MsgA",
+		},
+		{
+			// type_id 字段生成出来叫 TypeId，和生成的 TypeId() 方法重名
+			name: "字段和 TypeId 方法重名",
+			files: []*descriptorpb.FileDescriptorProto{{
+				Name:    new("a.proto"),
+				Package: new("a"),
+				Syntax:  new("proto3"),
+				Options: fileOptions("go_pg_test/genpb/a;apb"),
+				MessageType: []*descriptorpb.DescriptorProto{func() *descriptorpb.DescriptorProto {
+					m := msgWithTypeId("CUseItem", 123)
+					m.Field = []*descriptorpb.FieldDescriptorProto{{
+						Name:   new("type_id"),
+						Number: new(int32(1)),
+						Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:   descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum(),
+					}}
+					return m
+				}()},
+			}},
+			wantMsg: "field type_id becomes Go field TypeId",
 		},
 		{
 			name: "没写 go_package",

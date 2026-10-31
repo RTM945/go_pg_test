@@ -13,19 +13,19 @@ import (
 
 // fakeMsg 一个最小的 Msg，用来单测 Session 的攒帧/发送。
 type fakeMsg struct {
-	session io.Session
-	typeId  int32
-	payload []byte
-	size    int // 非 0 时假装 Size() 是这个值，用来测长度对不上的情况
+	typeId    int32
+	payload   []byte
+	size      int // 非 0 时假装 SizeVT() 是这个值，用来测长度对不上的情况
+	formatted int // String() 被调了几次
 }
 
-func (m *fakeMsg) SetSession(s io.Session)     { m.session = s }
-func (m *fakeMsg) Session() io.Session         { return m.session }
-func (m *fakeMsg) TypeId() int32               { return m.typeId }
-func (m *fakeMsg) String() string              { return "fake" }
-func (m *fakeMsg) Size() int                   { return max(m.size, len(m.payload)) }
-func (m *fakeMsg) Read(b []byte) error         { m.payload = append(m.payload[:0], b...); return nil }
-func (m *fakeMsg) Write(b []byte) (int, error) { return copy(b, m.payload), nil }
+func (m *fakeMsg) TypeId() int32  { return m.typeId }
+func (m *fakeMsg) String() string { m.formatted++; return "fake" }
+func (m *fakeMsg) SizeVT() int    { return max(m.size, len(m.payload)) }
+func (m *fakeMsg) MarshalToSizedBufferVT(b []byte) (int, error) {
+	return copy(b[len(b)-len(m.payload):], m.payload), nil
+}
+func (m *fakeMsg) UnmarshalVT(b []byte) error { m.payload = bytes.Clone(b); return nil }
 
 // Write 只攒不发：调 Flush 之前响应体必须是空的。这是"事务提交成功才发"
 // 那条保证的落点——业务跑到一半发出去了，回滚就撤不回来了。
@@ -116,7 +116,32 @@ func TestSessionFlushNothingIsNoop(t *testing.T) {
 	}
 }
 
-// Size() 和实际编出来的长度对不上时必须拦住：放过去的话写出去的是个坏帧，
+// 关着 debug 时不格式化消息：拼日志要走反射，比编码本身贵十几倍。
+func TestSessionFlushSkipsFormattingWhenDebugOff(t *testing.T) {
+	rec := httptest.NewRecorder()
+	var logBuf bytes.Buffer
+	s := NewSession(rec, slog.New(logging.NewHandler(&logBuf, slog.LevelInfo)))
+
+	msgs := []*fakeMsg{{typeId: 123, payload: []byte{1}}, {typeId: 124, payload: []byte{2}}}
+	for _, m := range msgs {
+		if err := s.Write(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	for _, m := range msgs {
+		if m.formatted != 0 {
+			t.Errorf("typeId %d 被格式化了 %d 次", m.typeId, m.formatted)
+		}
+	}
+	if logBuf.Len() != 0 {
+		t.Errorf("Info 级别却打了日志:\n%s", logBuf.String())
+	}
+}
+
+// SizeVT() 和实际编出来的长度对不上时必须拦住：放过去的话写出去的是个坏帧，
 // 客户端解不出来还查不到原因。
 // 编码推迟到 Flush，所以 Write 成功、Flush 报错，且一个字节都不能发出去。
 func TestSessionFlushSizeMismatch(t *testing.T) {

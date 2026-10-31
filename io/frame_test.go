@@ -175,6 +175,50 @@ func TestReadFramesTooMany(t *testing.T) {
 	}
 }
 
+// rawMsg 把 payload 原样当成编码结果，测试 AppendMsg 用。
+type rawMsg struct {
+	typeId  int32
+	payload []byte
+	size    int // 非 0 时假装 SizeVT() 是这个值
+}
+
+func (m *rawMsg) TypeId() int32 { return m.typeId }
+func (m *rawMsg) SizeVT() int   { return max(m.size, len(m.payload)) }
+func (m *rawMsg) MarshalToSizedBufferVT(b []byte) (int, error) {
+	return copy(b[len(b)-len(m.payload):], m.payload), nil
+}
+func (m *rawMsg) UnmarshalVT(b []byte) error { m.payload = bytes.Clone(b); return nil }
+
+// AppendMsg 只是省掉中间那份 payload，帧格式必须和 AppendFrame 一字不差，追加语义也一样。
+func TestAppendMsgMatchesAppendFrame(t *testing.T) {
+	for _, payload := range [][]byte{nil, {0x08, 0x2a}, bytes.Repeat([]byte{0xab}, 300)} {
+		got, err := AppendMsg([]byte{0xee}, &rawMsg{typeId: 123, payload: payload})
+		if err != nil {
+			t.Fatalf("AppendMsg(%d 字节) error = %v", len(payload), err)
+		}
+		want, err := AppendFrame([]byte{0xee}, 123, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("payload %d 字节: AppendMsg = %x, AppendFrame = %x", len(payload), got, want)
+		}
+	}
+}
+
+// SizeVT 报大了，编出来的字节前面会留一截垃圾：必须报错，不能发。
+func TestAppendMsgSizeMismatch(t *testing.T) {
+	if _, err := AppendMsg(nil, &rawMsg{typeId: 123, payload: []byte{1, 2, 3}, size: 10}); err == nil {
+		t.Fatal("AppendMsg() = nil, want error")
+	}
+}
+
+func TestAppendMsgTooLarge(t *testing.T) {
+	if _, err := AppendMsg(nil, &rawMsg{typeId: 123, size: MaxPayloadSize + 1}); err == nil {
+		t.Fatal("AppendMsg() = nil, want error")
+	}
+}
+
 // AppendFrame 和 WriteFrame 必须产出一模一样的字节——包头布局只有一处定义
 func TestAppendFrameMatchesWriteFrame(t *testing.T) {
 	payload := []byte{0x08, 0x2a}

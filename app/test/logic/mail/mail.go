@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"go_pg_test/app/test/msg"
 	"go_pg_test/app/test/ptable"
+	"go_pg_test/app/test/session"
 	"go_pg_test/common/dispatch"
 	testpb "go_pg_test/genpb/test"
 )
@@ -30,8 +30,8 @@ var (
 
 // processMails 返回当前玩家的邮件。全服 GM 邮件在这里懒投递：
 // 只有玩家主动同步时，才把当前生效的 gm_mail 复制到自己的 user_mail。
-func processMails(ctx context.Context, req *msg.CMails) error {
-	uid := req.Session().UID()
+func processMails(ctx context.Context, s *session.User, _ *testpb.CMails) error {
+	uid := s.UID()
 
 	cache := currentCache()
 	if cache == nil {
@@ -47,8 +47,7 @@ func processMails(ctx context.Context, req *msg.CMails) error {
 		return cmp.Compare(b.Id(), a.Id())
 	})
 
-	resp := msg.NewSMails()
-	resp.Mails = make([]*testpb.MailData, 0, len(mails))
+	resp := &testpb.SMails{Mails: make([]*testpb.MailData, 0, len(mails))}
 	for _, m := range mails {
 		resp.Mails = append(resp.Mails, &testpb.MailData{
 			Key:       m.Id(),
@@ -59,12 +58,12 @@ func processMails(ctx context.Context, req *msg.CMails) error {
 			AwardList: m.AwardList(),
 		})
 	}
-	return req.Session().Write(resp)
+	return s.Write(resp)
 }
 
 // processReadMail 标记已读，没有响应包。有附件时状态变 3，否则变 1。
-func processReadMail(ctx context.Context, req *msg.CReadMail) error {
-	uid := req.Session().UID()
+func processReadMail(ctx context.Context, s *session.User, req *testpb.CReadMail) error {
+	uid := s.UID()
 	m := ptable.UserMailTable.GetById(ctx, req.Key)
 	if m == nil || m.Uid() != uid {
 		return ErrMailNotFound
@@ -82,8 +81,8 @@ func processReadMail(ctx context.Context, req *msg.CReadMail) error {
 
 // processGetAttachment 领取附件。当前没有道具系统，只做状态流转；
 // 真正的发奖逻辑之后接在这里。
-func processGetAttachment(ctx context.Context, req *msg.CGetAttachment) error {
-	uid := req.Session().UID()
+func processGetAttachment(ctx context.Context, s *session.User, req *testpb.CGetAttachment) error {
+	uid := s.UID()
 	m := ptable.UserMailTable.GetById(ctx, req.Key)
 	if m == nil || m.Uid() != uid {
 		return ErrMailNotFound
@@ -93,9 +92,7 @@ func processGetAttachment(ctx context.Context, req *msg.CGetAttachment) error {
 	}
 	m.SetState(MailStateRead)
 
-	resp := msg.NewSGetAttachment()
-	resp.Key = m.Id()
-	return req.Session().Write(resp)
+	return s.Write(&testpb.SGetAttachment{Key: m.Id()})
 }
 
 // checkClaimable 附件只能领一次，而且得真有附件——接上发奖逻辑之后，重复领取就是重复发奖。

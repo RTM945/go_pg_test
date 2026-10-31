@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"go_pg_test/app/test/logic/event"
-	"go_pg_test/app/test/msg"
 	testpb "go_pg_test/genpb/test"
 	gopgio "go_pg_test/io"
 )
@@ -57,7 +56,7 @@ type Robot struct {
 	reqToken              string
 	uid                   int64
 	name                  string
-	lastRed               *msg.SRedEnvelope
+	lastRed               *testpb.SRedEnvelope
 	eventVersions         map[int32]eventVersion
 	eventVersionsReceived bool
 	expectEvent           bool
@@ -78,11 +77,17 @@ func NewRobot(addr, account, deviceID string) *Robot {
 	return r
 }
 
-// Register 声明“哪个协议号由哪个函数处理”，和服务器侧 Register 是同一套思路。
-func (r *Robot) Register[T gopgio.Msg](typeId int32, newMsg func() T, fn func(T) error) {
+// Register 声明“哪个协议由哪个函数处理”，和服务器侧 Handle 是同一套思路：
+// 协议号取自 fn 参数的类型，调用方只写处理函数。
+func (r *Robot) Register[T any, PT interface {
+	*T
+	gopgio.Msg
+}](fn func(PT) error) {
+	var zero PT
+	typeId := zero.TypeId()
 	r.handlers[typeId] = func(payload []byte) error {
-		m := newMsg()
-		if err := m.Read(payload); err != nil {
+		m := PT(new(T))
+		if err := m.UnmarshalVT(payload); err != nil {
 			return fmt.Errorf("decode typeId %d: %w", typeId, err)
 		}
 		return fn(m)
@@ -90,7 +95,7 @@ func (r *Robot) Register[T gopgio.Msg](typeId int32, newMsg func() T, fn func(T)
 }
 
 func (r *Robot) registerHandlers() {
-	r.Register(testpb.PROTOCOL_TYPE_LoginResult, msg.NewLoginResult, func(m *msg.LoginResult) error {
+	r.Register(func(m *testpb.LoginResult) error {
 		r.uid = m.Uid
 		r.name = m.Name
 		r.refreshToken = m.RefreshToken
@@ -98,13 +103,13 @@ func (r *Robot) registerHandlers() {
 		return nil
 	})
 
-	r.Register(testpb.PROTOCOL_TYPE_SRedEnvelope, msg.NewSRedEnvelope, func(m *msg.SRedEnvelope) error {
+	r.Register(func(m *testpb.SRedEnvelope) error {
 		r.lastRed = m
 		log.Printf("← SRedEnvelope actId=%d todayCount=%d total=%d", m.ActId, m.TodayCount, m.Total)
 		return nil
 	})
 
-	r.Register(testpb.PROTOCOL_TYPE_EventVersions, msg.NewEventVersions, func(m *msg.EventVersions) error {
+	r.Register(func(m *testpb.EventVersions) error {
 		r.eventVersionsReceived = true
 		r.eventVersions = make(map[int32]eventVersion, len(m.Versions))
 		for typ, v := range m.Versions {
@@ -117,7 +122,7 @@ func (r *Robot) registerHandlers() {
 		return nil
 	})
 
-	r.Register(testpb.PROTOCOL_TYPE_SMails, msg.NewSMails, func(m *msg.SMails) error {
+	r.Register(func(m *testpb.SMails) error {
 		r.mailList = m.Mails
 		log.Printf("← SMails count=%d", len(m.Mails))
 		for _, mail := range m.Mails {
@@ -127,7 +132,7 @@ func (r *Robot) registerHandlers() {
 		return nil
 	})
 
-	r.Register(testpb.PROTOCOL_TYPE_SGetAttachment, msg.NewSGetAttachment, func(m *msg.SGetAttachment) error {
+	r.Register(func(m *testpb.SGetAttachment) error {
 		r.attachmentKey = m.Key
 		log.Printf("← SGetAttachment key=%d", m.Key)
 		return nil
@@ -143,21 +148,12 @@ type response struct {
 }
 
 func (r *Robot) send(m gopgio.Msg, loginToken, reqToken string) (*response, error) {
-	payload := make([]byte, m.Size())
-	n, err := m.Write(payload)
+	frame, err := gopgio.AppendMsg(nil, m)
 	if err != nil {
-		return nil, fmt.Errorf("encode typeId %d: %w", m.TypeId(), err)
-	}
-	if n != len(payload) {
-		return nil, fmt.Errorf("encode typeId %d: wrote %d/%d bytes", m.TypeId(), n, len(payload))
-	}
-
-	var frame bytes.Buffer
-	if err := gopgio.WriteFrame(&frame, m.TypeId(), payload); err != nil {
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, r.addr+"/", &frame)
+	httpReq, err := http.NewRequest(http.MethodPost, r.addr+"/", bytes.NewReader(frame))
 	if err != nil {
 		return nil, err
 	}
@@ -244,11 +240,7 @@ func (r *Robot) loginAuto() error {
 // sendLogin 发一个登录，原样返回响应（不管成败）。
 // 带 account 是 SDK 登录，ext 里带 extToken 是免登录，服务端要求恰好带一个。
 func (r *Robot) sendLogin(account string, ext map[int32]string) (*response, error) {
-	login := msg.NewLogin()
-	login.Plat = "test"
-	login.Account = account
-	login.ClientVersion = "robot"
-	login.Ext = ext
+	login := &testpb.CLogin{Plat: "test", Account: account, ClientVersion: "robot", Ext: ext}
 	return r.send(login, "", "")
 }
 
@@ -266,17 +258,15 @@ func (r *Robot) expectLoginRejected(account string, ext map[int32]string, status
 }
 
 func (r *Robot) click(loginToken, reqToken string) (*response, error) {
-	m := msg.NewCRedEnvelopeClick()
-	m.ActId = testActId
-	return r.send(m, loginToken, reqToken)
+	return r.send(&testpb.CRedEnvelopeClick{ActId: testActId}, loginToken, reqToken)
 }
 
 func (r *Robot) heartbeat() (*response, error) {
-	return r.send(msg.NewHeartbeat(), r.loginToken, r.reqToken)
+	return r.send(&testpb.CHeartbeat{}, r.loginToken, r.reqToken)
 }
 
 func (r *Robot) pollEvents() (*response, error) {
-	return r.send(msg.NewPollEvents(), r.loginToken, r.reqToken)
+	return r.send(&testpb.CPollEvents{}, r.loginToken, r.reqToken)
 }
 
 func step(name string) {
@@ -308,7 +298,7 @@ func (r *Robot) Run() error {
 	}
 	log.Printf("   心跳 ok，requestToken 未变: %s", r.reqToken)
 
-	step("3. PollEvents：按事件类型比较版本号")
+	step("3. CPollEvents：按事件类型比较版本号")
 	reqBeforePoll := r.reqToken
 	beforeVersions := maps.Clone(r.eventVersions)
 	pollResp, err := r.pollEvents()
@@ -319,13 +309,13 @@ func (r *Robot) Run() error {
 		return fmt.Errorf("poll events failed: HTTP %d %s: %s", pollResp.status, pollResp.errCode, pollResp.body)
 	}
 	if pollResp.reqToken != "" {
-		return fmt.Errorf("PollEvents 不应下发新 requestToken，got %q", pollResp.reqToken)
+		return fmt.Errorf("CPollEvents 不应下发新 requestToken，got %q", pollResp.reqToken)
 	}
 	if r.reqToken != reqBeforePoll {
-		return fmt.Errorf("PollEvents 改动了 requestToken: %q -> %q", reqBeforePoll, r.reqToken)
+		return fmt.Errorf("CPollEvents 改动了 requestToken: %q -> %q", reqBeforePoll, r.reqToken)
 	}
 	if !r.eventVersionsReceived {
-		return fmt.Errorf("PollEvents 没有返回 EventVersions")
+		return fmt.Errorf("CPollEvents 没有返回 EventVersions")
 	}
 	afterVersions := r.eventVersions
 	mailBefore, mailAfter := beforeVersions[event.EventTypeMailNew], afterVersions[event.EventTypeMailNew]
@@ -397,7 +387,7 @@ func (r *Robot) Run() error {
 
 	step("7. CMails：拉取邮件并领取第一封")
 	req3 := req2
-	syncResp, err := r.send(msg.NewCMails(), login0, req3)
+	syncResp, err := r.send(&testpb.CMails{}, login0, req3)
 	if err != nil {
 		return err
 	}
@@ -417,9 +407,7 @@ func (r *Robot) Run() error {
 		first := r.mailList[0]
 
 		// CReadMail 没有响应包，只能靠下一次同步确认状态。
-		read := msg.NewCReadMail()
-		read.Key = first.Key
-		readResp, err := r.send(read, login0, req3)
+		readResp, err := r.send(&testpb.CReadMail{Key: first.Key}, login0, req3)
 		if err != nil {
 			return err
 		}
@@ -431,7 +419,7 @@ func (r *Robot) Run() error {
 		}
 		req3 = readResp.reqToken
 
-		syncResp, err = r.send(msg.NewCMails(), login0, req3)
+		syncResp, err = r.send(&testpb.CMails{}, login0, req3)
 		if err != nil {
 			return err
 		}
@@ -451,8 +439,7 @@ func (r *Robot) Run() error {
 			return fmt.Errorf("读取后 mail %d 状态是 %d，want 1/3", first.Key, stateAfterRead)
 		}
 
-		claim := msg.NewCGetAttachment()
-		claim.Key = first.Key
+		claim := &testpb.CGetAttachment{Key: first.Key}
 		claimResp, err := r.send(claim, login0, req3)
 		if err != nil {
 			return err
@@ -486,7 +473,7 @@ func (r *Robot) Run() error {
 			log.Printf("   重复领取，拒绝: HTTP %d %s", again.status, again.errCode)
 
 			// 再同步一次，确认领取状态已经落库。
-			syncResp, err = r.send(msg.NewCMails(), login0, req3)
+			syncResp, err = r.send(&testpb.CMails{}, login0, req3)
 			if err != nil {
 				return err
 			}
@@ -562,7 +549,7 @@ func main() {
 	addr := flag.String("addr", "http://127.0.0.1:8080", "server address")
 	account := flag.String("account", "", "test account; empty = random")
 	deviceID := flag.String("device", "robot-device", "device id")
-	expectEvent := flag.Bool("expect-event", false, "require at least one event in the first PollEvents")
+	expectEvent := flag.Bool("expect-event", false, "require at least one event in the first CPollEvents")
 	expectMail := flag.Bool("expect-mail", false, "require at least one mail in CMails")
 	flag.Parse()
 

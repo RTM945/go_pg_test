@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	stdio "io"
+	"slices"
 )
 
 const (
@@ -63,21 +64,51 @@ func readOneFrame(r stdio.Reader) (typeId int32, payload []byte, err error) {
 	return typeId, payload, nil
 }
 
-// AppendFrame 把一帧追加到 dst 后面。包头怎么排只有这一处知道。
+// AppendFrame 把一帧追加到 dst 后面。
 //
-// 用它攒多帧再一次写出，比赛多次 WriteFrame 省 syscall——服务端回包会用到。
+// 用它攒多帧再一次写出，比赛多次 WriteFrame 省 syscall。要发的是消息时用 AppendMsg，
+// 省掉中间那份 payload。
 func AppendFrame(dst []byte, typeId int32, payload []byte) ([]byte, error) {
-	// 发出去的包超过上限，对端也会拒，不如在本地就拦住
-	if len(payload) > MaxPayloadSize {
-		return nil, fmt.Errorf("typeId %d: payload size %d exceeds limit %d", typeId, len(payload), MaxPayloadSize)
+	if err := checkPayloadSize(typeId, len(payload)); err != nil {
+		return nil, err
 	}
-
-	var header [FrameHeaderSize]byte
-	binary.BigEndian.PutUint32(header[:4], uint32(len(payload)))
-	binary.BigEndian.PutUint32(header[4:8], uint32(typeId))
-
-	dst = append(dst, header[:]...)
+	dst = appendHeader(dst, typeId, len(payload))
 	return append(dst, payload...), nil
+}
+
+// AppendMsg 把 m 编成一帧追加到 dst 后面：只算一次大小，直接编进 dst，
+// 不先编进一份单独的 payload 再复制。服务端回包用它。
+func AppendMsg(dst []byte, m Msg) ([]byte, error) {
+	typeId, size := m.TypeId(), m.SizeVT()
+	if err := checkPayloadSize(typeId, size); err != nil {
+		return nil, err
+	}
+	dst = appendHeader(dst, typeId, size)
+	off := len(dst)
+	dst = slices.Grow(dst, size)[:off+size]
+	n, err := m.MarshalToSizedBufferVT(dst[off:])
+	if err != nil {
+		return nil, fmt.Errorf("typeId %d: encode: %w", typeId, err)
+	}
+	if n != size {
+		// SizeVT 和实际编出来的长度对不上，发出去的帧会是坏的，宁可不发
+		return nil, fmt.Errorf("typeId %d: encoded %d bytes but SizeVT() says %d", typeId, n, size)
+	}
+	return dst, nil
+}
+
+// appendHeader 追加包头。包头怎么排只有这一处知道。
+func appendHeader(dst []byte, typeId int32, payloadLen int) []byte {
+	dst = binary.BigEndian.AppendUint32(dst, uint32(payloadLen))
+	return binary.BigEndian.AppendUint32(dst, uint32(typeId))
+}
+
+// checkPayloadSize 发出去的包超过上限，对端也会拒，不如在本地就拦住。
+func checkPayloadSize(typeId int32, n int) error {
+	if n > MaxPayloadSize {
+		return fmt.Errorf("typeId %d: payload size %d exceeds limit %d", typeId, n, MaxPayloadSize)
+	}
+	return nil
 }
 
 // WriteFrame 把 payload 按封包格式写成一帧，和 ReadFrame 对称。

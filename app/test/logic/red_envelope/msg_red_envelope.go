@@ -2,17 +2,17 @@ package red_envelope
 
 import (
 	"context"
-	"go_pg_test/app/test/msg"
+
+	"go_pg_test/app/test/session"
+	testpb "go_pg_test/genpb/test"
 )
 
-func ProcessCRedEnvelope(ctx context.Context, req *msg.CRedEnvelope) error {
-	uid := req.Session().UID()
-	userRedEnvelope := Get(ctx, uid, req.GetActId(), false)
-	return userRedEnvelope.Online(req.Session())
+func ProcessCRedEnvelope(ctx context.Context, s *session.User, req *testpb.CRedEnvelope) error {
+	userRedEnvelope := Get(ctx, s.UID(), req.GetActId(), false)
+	return userRedEnvelope.Online(s)
 }
 
-func ProcessCRedEnvelopeClick(ctx context.Context, req *msg.CRedEnvelopeClick) error {
-	uid := req.Session().UID()
-	userRedEnvelope := Get(ctx, uid, req.GetActId(), false)
-	return userRedEnvelope.Click(req.Session())
+func ProcessCRedEnvelopeClick(ctx context.Context, s *session.User, req *testpb.CRedEnvelopeClick) error {
+	userRedEnvelope := Get(ctx, s.UID(), req.GetActId(), false)
+	return userRedEnvelope.Click(s)
 }

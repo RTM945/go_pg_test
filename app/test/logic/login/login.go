@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"go_pg_test/app/test/msg"
 	"go_pg_test/app/test/ptable"
-	appsession "go_pg_test/app/test/session"
+	"go_pg_test/app/test/session"
 	"go_pg_test/common/db"
 	"go_pg_test/common/dispatch"
 	"go_pg_test/common/redis"
 	"go_pg_test/common/token"
-	"go_pg_test/io"
+	testpb "go_pg_test/genpb/test"
 	"pdbgen/dbpool"
 )
 
@@ -50,19 +49,10 @@ type loginOutcome struct {
 	requestToken string
 }
 
-func (o loginOutcome) write(s io.Session) error {
-	appSession, ok := s.(*appsession.Session)
-	if !ok {
-		return fmt.Errorf("login: session %T cannot carry tokens", s)
-	}
-	appSession.SetNextLoginToken(o.loginToken)
-	appSession.SetNextReqToken(o.requestToken)
-
-	resp := msg.NewLoginResult()
-	resp.Uid = o.uid
-	resp.Name = o.name
-	resp.RefreshToken = o.refreshToken
-	return s.Write(resp)
+func (o loginOutcome) write(s *session.Session) error {
+	s.SetNextLoginToken(o.loginToken)
+	s.SetNextReqToken(o.requestToken)
+	return s.Write(&testpb.LoginResult{Uid: o.uid, Name: o.name, RefreshToken: o.refreshToken})
 }
 
 // 三个 token：
@@ -77,7 +67,9 @@ func (o loginOutcome) write(s io.Session) error {
 // requestToken 单独拿到过不了鉴权，所以存明文。
 //
 // account（SDK 登录）和 refreshToken（免登录）恰好带一个，带哪个就走哪条路。
-func ProcessLogin(ctx context.Context, req *msg.Login) error {
+//
+// 处理方式是 session.Guest：登录前没有 loginToken 可验，事务和锁也由下面各条路自己开。
+func ProcessCLogin(ctx context.Context, s *session.Guest, req *testpb.CLogin) error {
 	deviceID := req.Ext[extUDID]
 	refreshToken := req.Ext[extToken] // 用于自动登录的 token
 	if err := checkLoginParams(req.Plat, req.Account, deviceID, refreshToken, req.ClientVersion); err != nil {
@@ -93,9 +85,9 @@ func ProcessLogin(ctx context.Context, req *msg.Login) error {
 	// TODO: 按 IP / account 限流
 
 	if refreshToken != "" {
-		return autoLogin(ctx, req, deviceID, refreshToken)
+		return autoLogin(ctx, s.Session, deviceID, refreshToken)
 	}
-	return sdkLogin(ctx, req, v, deviceID)
+	return sdkLogin(ctx, s.Session, req, v, deviceID)
 }
 
 // checkLoginParams 登录参数都会进数据库、索引或 Redis：必填的不能为空，都不能超过 maxFieldLen。
@@ -125,7 +117,7 @@ func startSession(user *ptable.User, now time.Time) (requestToken string) {
 	return requestToken
 }
 
-func sdkLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID string) error {
+func sdkLogin(ctx context.Context, s *session.Session, req *testpb.CLogin, v PlatformVerifier, deviceID string) error {
 	// 事务外：向平台校验凭证
 	platUID, err := v.Verify(ctx, req.Account, req.Ext)
 	if err != nil {
@@ -163,12 +155,12 @@ func sdkLogin(ctx context.Context, req *msg.Login, v PlatformVerifier, deviceID 
 	if out.loginToken, err = redis.IssueLoginToken(ctx, out.uid, deviceID); err != nil {
 		return err
 	}
-	return out.write(req.Session())
+	return out.write(s)
 }
 
 // autoLogin 只凭 refreshToken 找人：按它的哈希找到是哪一行，也就知道了要锁哪个 uid。
 // 找行在事务外、不加锁，所以锁内要按主键重读，再校验一遍。
-func autoLogin(ctx context.Context, req *msg.Login, deviceID, presented string) error {
+func autoLogin(ctx context.Context, s *session.Session, deviceID, presented string) error {
 	hash := token.Hash(presented)
 	rowID, uid, err := findRefreshRow(ctx, hash)
 	if err != nil {
@@ -214,7 +206,7 @@ func autoLogin(ctx context.Context, req *msg.Login, deviceID, presented string) 
 	if out.loginToken, err = redis.IssueLoginToken(ctx, uid, deviceID); err != nil {
 		return err
 	}
-	return out.write(req.Session())
+	return out.write(s)
 }
 
 // findRefreshRow 事务外按哈希找免登录行：先当成当前 token 找，找不到再当成上一个 token 找
