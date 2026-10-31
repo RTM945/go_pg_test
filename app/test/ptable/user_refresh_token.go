@@ -203,8 +203,8 @@ func (o *UserRefreshToken) FlushStmt() (string, []any) {
 	return dbctx.UpdateStmt("\"user_refresh_token\"", "\"id\"", o.id, updateColumnsUserRefreshToken, o.dirty,
 		o.uid,
 		o.deviceId,
-		dbctx.Secret(o.token),
-		dbctx.Secret(o.prevToken),
+		o.token,
+		o.prevToken,
 		o.rotatedAt,
 		o.expiresAt,
 		o.revokedAt,
@@ -259,7 +259,7 @@ func (t userRefreshToken) SelectByUidDeviceId(ctx context.Context, uid int64, de
 func (t userRefreshToken) queryToken(ctx context.Context, q dbctx.Querier, token string) *UserRefreshToken {
 	dbctx.CheckPredicate(ctx, "user_refresh_token", dirtyUserRefreshTokenToken)
 	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"token\" = $1"
-	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, dbctx.Secret(token))
+	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, token)
 }
 
 func (t userRefreshToken) GetByToken(ctx context.Context, token string) *UserRefreshToken {
@@ -273,7 +273,7 @@ func (t userRefreshToken) SelectByToken(ctx context.Context, token string) *User
 func (t userRefreshToken) queryPrevToken(ctx context.Context, q dbctx.Querier, prevToken string) []*UserRefreshToken {
 	dbctx.CheckPredicate(ctx, "user_refresh_token", dirtyUserRefreshTokenPrevToken)
 	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"prev_token\" = $1"
-	return dbctx.QueryList(ctx, q, query, scanUserRefreshToken, dbctx.Secret(prevToken))
+	return dbctx.QueryList(ctx, q, query, scanUserRefreshToken, prevToken)
 }
 
 func (t userRefreshToken) ListByPrevToken(ctx context.Context, prevToken string) []*UserRefreshToken {
@@ -315,8 +315,8 @@ func (t userRefreshToken) Insert(ctx context.Context, o *UserRefreshToken) {
 	if err := tx.QueryRow(ctx, query,
 		o.uid,
 		o.deviceId,
-		dbctx.Secret(o.token),
-		dbctx.Secret(o.prevToken),
+		o.token,
+		o.prevToken,
 		o.rotatedAt,
 		o.expiresAt,
 		o.revokedAt,
