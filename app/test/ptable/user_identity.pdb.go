@@ -22,8 +22,12 @@ type UserIdentity struct {
 	loaded   bool   // 对应数据库里的一行：查出来的，或者 Insert 过的
 	deleted  bool   // 标记了删除，提交前 flush 成 DELETE
 	detached bool   // 脱离了事务：SetXxx / Delete 会 panic
+	foreign  bool   // 当前事务没有持有保护这一行的锁（uid 的值）：SetXxx / Delete 会 panic
 	dirty    uint64 // 改过、还没落库的列，第 i 位对应 updateColumnsUserIdentity[i]
 }
+
+// UserIdentity 的每一行由 key 等于 uid 的 bigint 咨询锁保护（pdb.xml 的 lock），修改要持有它。
+var _ dbctx.Owned = (*UserIdentity)(nil)
 
 const (
 	dirtyUserIdentityPlatform    uint64 = 1 << 0
@@ -57,6 +61,9 @@ func (o *UserIdentity) SetPlatform(v int16) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.platform != v {
 		o.platform = v
 		o.dirty |= dirtyUserIdentityPlatform
@@ -70,6 +77,9 @@ func (o *UserIdentity) PlatformUID() string {
 func (o *UserIdentity) SetPlatformUID(v string) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.platformUID != v {
 		o.platformUID = v
@@ -85,6 +95,9 @@ func (o *UserIdentity) SetUid(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.uid != v {
 		o.uid = v
 		o.dirty |= dirtyUserIdentityUid
@@ -99,6 +112,9 @@ func (o *UserIdentity) SetCreatedAt(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.createdAt != v {
 		o.createdAt = v
 		o.dirty |= dirtyUserIdentityCreatedAt
@@ -109,6 +125,9 @@ func (o *UserIdentity) SetCreatedAt(v int64) {
 func (o *UserIdentity) Delete() {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.loaded {
 		o.deleted = true
@@ -133,6 +152,12 @@ func (o *UserIdentity) Detach() {
 	}
 }
 
+// 以下实现 dbctx.Owned。
+
+func (o *UserIdentity) LockKey() (string, int64) { return "uid", o.uid }
+
+func (o *UserIdentity) MarkForeign() { o.foreign = true }
+
 func (o *UserIdentity) DirtyColumns() uint64 {
 	if !o.loaded || o.deleted {
 		return 0
@@ -145,11 +170,11 @@ func (o *UserIdentity) FlushStmt() (string, []any) {
 	case !o.loaded:
 		return "", nil
 	case o.deleted:
-		return "DELETE FROM \"user_identity\" WHERE \"id\" = $1", []any{o.id}
+		return "DELETE FROM \"public\".\"user_identity\" WHERE \"id\" = $1", []any{o.id}
 	case o.dirty == 0:
 		return "", nil
 	}
-	return dbctx.UpdateStmt("\"user_identity\"", "\"id\"", o.id, updateColumnsUserIdentity, o.dirty,
+	return dbctx.UpdateStmt("\"public\".\"user_identity\"", "\"id\"", o.id, updateColumnsUserIdentity, o.dirty,
 		o.platform,
 		o.platformUID,
 		o.uid,
@@ -173,7 +198,7 @@ func scanUserIdentity(s dbctx.Scanner) (*UserIdentity, error) {
 }
 
 func (t userIdentity) queryId(ctx context.Context, q dbctx.Querier, id int64) *UserIdentity {
-	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"user_identity\" WHERE \"id\" = $1"
+	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"public\".\"user_identity\" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserIdentity, id)
 }
 
@@ -190,7 +215,7 @@ func (t userIdentity) SelectById(ctx context.Context, id int64) *UserIdentity {
 
 func (t userIdentity) queryUid(ctx context.Context, q dbctx.Querier, uid int64) []*UserIdentity {
 	dbctx.CheckPredicate(ctx, "user_identity", dirtyUserIdentityUid)
-	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"user_identity\" WHERE \"uid\" = $1"
+	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"public\".\"user_identity\" WHERE \"uid\" = $1"
 	return dbctx.QueryList(ctx, q, query, scanUserIdentity, uid)
 }
 
@@ -204,7 +229,7 @@ func (t userIdentity) SelectListByUid(ctx context.Context, uid int64) []*UserIde
 
 func (t userIdentity) queryPlatformPlatformUID(ctx context.Context, q dbctx.Querier, platform int16, platformUID string) *UserIdentity {
 	dbctx.CheckPredicate(ctx, "user_identity", dirtyUserIdentityPlatform|dirtyUserIdentityPlatformUID)
-	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"user_identity\" WHERE \"platform\" = $1 AND \"platform_uid\" = $2"
+	const query = "SELECT " + selectColumnsUserIdentity + " FROM \"public\".\"user_identity\" WHERE \"platform\" = $1 AND \"platform_uid\" = $2"
 	return dbctx.QueryOne(ctx, q, query, scanUserIdentity, platform, platformUID)
 }
 
@@ -226,7 +251,7 @@ func (t userIdentity) DeleteById(ctx context.Context, id int64) bool {
 	return true
 }
 
-const selectAllUserIdentity = "SELECT " + selectColumnsUserIdentity + " FROM \"user_identity\""
+const selectAllUserIdentity = "SELECT " + selectColumnsUserIdentity + " FROM \"public\".\"user_identity\""
 
 func (t userIdentity) GetAll(ctx context.Context) []*UserIdentity {
 	return dbctx.QueryList(ctx, dbctx.SQLTxFromCtx(ctx), selectAllUserIdentity, scanUserIdentity)
@@ -243,15 +268,13 @@ func (t userIdentity) Insert(ctx context.Context, o *UserIdentity) {
 	}
 	tx := dbctx.SQLTxFromCtx(ctx)
 	dbctx.GetOrAddCachedRecord(ctx, o) // 主键还是 0：只登记快照，回滚时恢复成插入前的样子
-	const query = "INSERT INTO \"user_identity\" (\"platform\", \"platform_uid\", \"uid\", \"created_at\") VALUES ($1, $2, $3, $4) RETURNING \"id\""
-	if err := tx.QueryRow(ctx, query,
+	const query = "INSERT INTO \"public\".\"user_identity\" (\"platform\", \"platform_uid\", \"uid\", \"created_at\") VALUES ($1, $2, $3, $4) RETURNING \"id\""
+	dbctx.InsertReturning(ctx, tx, query, &o.id,
 		o.platform,
 		o.platformUID,
 		o.uid,
 		o.createdAt,
-	).Scan(&o.id); err != nil {
-		panic(err)
-	}
+	)
 	o.loaded, o.dirty = true, 0
 	dbctx.GetOrAddCachedRecord(ctx, o) // 主键回填后进身份表
 }

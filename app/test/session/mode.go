@@ -14,9 +14,9 @@ import (
 
 // 处理方式（认证、事务、锁、requestToken 链）由处理函数 session 参数的类型决定：
 //
-//	func ProcessCMails(ctx context.Context, s *session.User, req *testpb.CMails) error
+//	func ProcessCRedEnvelopeClick(ctx context.Context, s *session.User, req *testpb.CRedEnvelopeClick) error
 //
-// 换处理方式就是换这个类型。生成的注册表只写 processRegistry.Handle(mail.ProcessCMails)，
+// 换处理方式就是换这个类型。生成的注册表只写 processRegistry.Handle(red_envelope.ProcessCRedEnvelopeClick)，
 // 不知道处理方式；协议（proto）里也不写——那是服务端怎么访问数据库的事。
 //
 // 要只读查询、阻塞锁这类新方式时，在这里加一种类型，实现 mode 的三个方法。
@@ -69,7 +69,7 @@ func NewRegistry() *Registry {
 }
 
 // Handle 登记一个协议的处理函数。协议号取自 req 的类型，处理方式取自 s 的类型，
-// 两样都从 fn 的签名推出来，调用方只写 Handle(mail.ProcessCMails)。
+// 两样都从 fn 的签名推出来，调用方只写 Handle(red_envelope.ProcessCRedEnvelopeClick)。
 // 同一个协议号登记两次直接 panic。
 func (r *Registry) Handle[S any, PS mode[S], T any, PT interface {
 	*T

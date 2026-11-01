@@ -80,7 +80,7 @@ func (s *Session) Flush() error {
 }
 
 // logSend 打出这次发了哪些协议。格式化消息要走反射，比编码本身贵十几倍
-// （带 20 封邮件的 SMails 要几十微秒），所以只在 debug 打开时才拼。
+// （带几十个元素的列表要几十微秒），所以只在 debug 打开时才拼。
 // 多帧时按 batch 展开，和 sql batch 一样一眼能看出这次发了什么。
 func (s *Session) logSend(msgs []io.Msg) {
 	log := s.Logger()

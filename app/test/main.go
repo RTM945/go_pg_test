@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"go_pg_test/app/test/logic/event"
-	"go_pg_test/app/test/logic/mail"
 	"go_pg_test/common/httpserver"
 	"go_pg_test/common/logging"
 	"go_pg_test/common/redis"
@@ -32,7 +31,6 @@ var (
 	logMaxSize = flag.Int("log-max-size", 100, "rotate the log file after this many MB")
 	logBackups = flag.Int("log-backups", 7, "how many rotated log files to keep")
 	debugEvent = flag.Bool("debug-event", false, "publish one test event at startup (dev only)")
-	gmToken    = flag.String("gm-token", "", "shared token for POST /gm/mail and /gm/mail/notify; empty disables them")
 )
 
 // 要加 BI 日志就在这儿再建一个：换一份 Options（另一个 Path、可能另一套滚动策略），显式递给需要它的地方。
@@ -56,13 +54,9 @@ func newLogger() (*slog.Logger, func() error, error) {
 // newMux 单独拆出来是为了能直接测路由：只有 POST 会进 handler，
 // 浏览器拿 GET 去摸 /favicon.ico 在 mux 这一层就被挡掉，
 // 不用在 handler 里自己判 r.URL.Path。
-func newMux(log *slog.Logger, gmToken string) *http.ServeMux {
+func newMux(log *slog.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /", handler(log))
-	if gmToken != "" {
-		mux.HandleFunc("POST /gm/mail", gmMailHandler(log, gmToken))
-		mux.HandleFunc("POST /gm/mail/notify", gmMailNotifyHandler(log, gmToken))
-	}
 	return mux
 }
 
@@ -97,21 +91,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	// 进程级配置缓存：启动装载一次；GM 平台广播时每个服写完库各自 Reload。
-	mailCache := mail.NewCache(log)
-	if err := mailCache.Reload(ctx); err != nil {
-		log.Error("load gm_mail cache", "err", err)
-		os.Exit(1)
-	}
-	mail.SetCache(mailCache)
-
 	if *debugEvent {
-		seq, err := redis.IncrGlobalEventVersion(ctx, event.EventTypeMailNew)
+		seq, err := redis.IncrGlobalEventVersion(ctx, event.EventTypeActivityStart)
 		if err != nil {
 			log.Error("bump debug event version", "err", err)
 			os.Exit(1)
 		}
-		log.Info("debug event version bumped", "eventType", event.EventTypeMailNew, "seq", seq)
+		log.Info("debug event version bumped", "eventType", event.EventTypeActivityStart, "seq", seq)
 	}
 
 	// 收到 Ctrl+C / SIGTERM 就取消
@@ -120,7 +106,7 @@ func main() {
 
 	log.Info("listening", "app", schema.AppName, "addr", *addr, "schema", *schemaPath, "showSQL", schema.ShowSQL)
 	// 阻塞
-	serveErr := httpserver.Serve(ctx, &http.Server{Addr: *addr, Handler: newMux(log, *gmToken)}, shutdownTimeout, log)
+	serveErr := httpserver.Serve(ctx, &http.Server{Addr: *addr, Handler: newMux(log)}, shutdownTimeout, log)
 
 	dbpool.Close()
 

@@ -1,5 +1,23 @@
 # 应用pdbgen的业务模板
-自带了Login逻辑
+自带了 Login 逻辑，和一个领红包的例子（今天的次数每天 5 点清零）。
+
+## 生成代码
+```
+make gen-proto    # proto → genpb/ 和处理函数注册表（go run ./cmd/genpb）
+make gen-schema   # pdb.xml → app/test/ptable/<表名>.pdb.go，再打印要执行的增量 DDL（要连库，检查后手工执行）
+```
+表代码和 DDL 的生成器是 pdbgen 的 `gen/bean`、`gen/ddl`，登记在 go.mod 的 `tool` 里，跟着 `replace pdbgen => ../pdbgen` 走，
+不用另外编 exe：`go tool bean -schema app/test/pdb.xml`、`go tool ddl -schema app/test/pdb.xml`。
+
+pdb.xml 里每张表都写了 `lock`：改一行（`SetXxx` / `Delete`）要持有那个玩家的 uid 锁
+（`db.WithUserLock` / `db.WithUserTryLock`，`session.User` 的处理函数已经拿着），否则 panic。
+
+## 跑起来
+```
+make run                                  # 默认 :8080，要先起好下面的 PostgreSQL、PgBouncer、Redis
+go run ./cmd/robot                        # 登录 → 心跳 → 拉事件 → 领红包 → 重放拒绝 → 免登录 → 顶号
+go run ./cmd/robot -addr http://127.0.0.1:8081
+```
 
 # 最新最潮的wlsc
 ```

@@ -23,8 +23,12 @@ type RedEnvelope struct {
 	loaded   bool   // 对应数据库里的一行：查出来的，或者 Insert 过的
 	deleted  bool   // 标记了删除，提交前 flush 成 DELETE
 	detached bool   // 脱离了事务：SetXxx / Delete 会 panic
+	foreign  bool   // 当前事务没有持有保护这一行的锁（uid 的值）：SetXxx / Delete 会 panic
 	dirty    uint64 // 改过、还没落库的列，第 i 位对应 updateColumnsRedEnvelope[i]
 }
+
+// RedEnvelope 的每一行由 key 等于 uid 的 bigint 咨询锁保护（pdb.xml 的 lock），修改要持有它。
+var _ dbctx.Owned = (*RedEnvelope)(nil)
 
 const (
 	dirtyRedEnvelopeUid           uint64 = 1 << 0
@@ -60,6 +64,9 @@ func (o *RedEnvelope) SetUid(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.uid != v {
 		o.uid = v
 		o.dirty |= dirtyRedEnvelopeUid
@@ -73,6 +80,9 @@ func (o *RedEnvelope) ActId() int32 {
 func (o *RedEnvelope) SetActId(v int32) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.actId != v {
 		o.actId = v
@@ -88,6 +98,9 @@ func (o *RedEnvelope) SetLastRefreshAt(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.lastRefreshAt != v {
 		o.lastRefreshAt = v
 		o.dirty |= dirtyRedEnvelopeLastRefreshAt
@@ -101,6 +114,9 @@ func (o *RedEnvelope) TodayCount() int32 {
 func (o *RedEnvelope) SetTodayCount(v int32) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.todayCount != v {
 		o.todayCount = v
@@ -116,6 +132,9 @@ func (o *RedEnvelope) SetTotal(v int32) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.total != v {
 		o.total = v
 		o.dirty |= dirtyRedEnvelopeTotal
@@ -126,6 +145,9 @@ func (o *RedEnvelope) SetTotal(v int32) {
 func (o *RedEnvelope) Delete() {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.loaded {
 		o.deleted = true
@@ -150,6 +172,12 @@ func (o *RedEnvelope) Detach() {
 	}
 }
 
+// 以下实现 dbctx.Owned。
+
+func (o *RedEnvelope) LockKey() (string, int64) { return "uid", o.uid }
+
+func (o *RedEnvelope) MarkForeign() { o.foreign = true }
+
 func (o *RedEnvelope) DirtyColumns() uint64 {
 	if !o.loaded || o.deleted {
 		return 0
@@ -162,11 +190,11 @@ func (o *RedEnvelope) FlushStmt() (string, []any) {
 	case !o.loaded:
 		return "", nil
 	case o.deleted:
-		return "DELETE FROM \"user_red_envelope\" WHERE \"id\" = $1", []any{o.id}
+		return "DELETE FROM \"public\".\"user_red_envelope\" WHERE \"id\" = $1", []any{o.id}
 	case o.dirty == 0:
 		return "", nil
 	}
-	return dbctx.UpdateStmt("\"user_red_envelope\"", "\"id\"", o.id, updateColumnsRedEnvelope, o.dirty,
+	return dbctx.UpdateStmt("\"public\".\"user_red_envelope\"", "\"id\"", o.id, updateColumnsRedEnvelope, o.dirty,
 		o.uid,
 		o.actId,
 		o.lastRefreshAt,
@@ -191,7 +219,7 @@ func scanRedEnvelope(s dbctx.Scanner) (*RedEnvelope, error) {
 }
 
 func (t redEnvelope) queryId(ctx context.Context, q dbctx.Querier, id int64) *RedEnvelope {
-	const query = "SELECT " + selectColumnsRedEnvelope + " FROM \"user_red_envelope\" WHERE \"id\" = $1"
+	const query = "SELECT " + selectColumnsRedEnvelope + " FROM \"public\".\"user_red_envelope\" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanRedEnvelope, id)
 }
 
@@ -208,7 +236,7 @@ func (t redEnvelope) SelectById(ctx context.Context, id int64) *RedEnvelope {
 
 func (t redEnvelope) queryUidActId(ctx context.Context, q dbctx.Querier, uid int64, actId int32) *RedEnvelope {
 	dbctx.CheckPredicate(ctx, "user_red_envelope", dirtyRedEnvelopeUid|dirtyRedEnvelopeActId)
-	const query = "SELECT " + selectColumnsRedEnvelope + " FROM \"user_red_envelope\" WHERE \"uid\" = $1 AND \"act_id\" = $2"
+	const query = "SELECT " + selectColumnsRedEnvelope + " FROM \"public\".\"user_red_envelope\" WHERE \"uid\" = $1 AND \"act_id\" = $2"
 	return dbctx.QueryOne(ctx, q, query, scanRedEnvelope, uid, actId)
 }
 
@@ -230,7 +258,7 @@ func (t redEnvelope) DeleteById(ctx context.Context, id int64) bool {
 	return true
 }
 
-const selectAllRedEnvelope = "SELECT " + selectColumnsRedEnvelope + " FROM \"user_red_envelope\""
+const selectAllRedEnvelope = "SELECT " + selectColumnsRedEnvelope + " FROM \"public\".\"user_red_envelope\""
 
 func (t redEnvelope) GetAll(ctx context.Context) []*RedEnvelope {
 	return dbctx.QueryList(ctx, dbctx.SQLTxFromCtx(ctx), selectAllRedEnvelope, scanRedEnvelope)
@@ -247,16 +275,14 @@ func (t redEnvelope) Insert(ctx context.Context, o *RedEnvelope) {
 	}
 	tx := dbctx.SQLTxFromCtx(ctx)
 	dbctx.GetOrAddCachedRecord(ctx, o) // 主键还是 0：只登记快照，回滚时恢复成插入前的样子
-	const query = "INSERT INTO \"user_red_envelope\" (\"uid\", \"act_id\", \"last_refresh_at\", \"today_count\", \"total\") VALUES ($1, $2, $3, $4, $5) RETURNING \"id\""
-	if err := tx.QueryRow(ctx, query,
+	const query = "INSERT INTO \"public\".\"user_red_envelope\" (\"uid\", \"act_id\", \"last_refresh_at\", \"today_count\", \"total\") VALUES ($1, $2, $3, $4, $5) RETURNING \"id\""
+	dbctx.InsertReturning(ctx, tx, query, &o.id,
 		o.uid,
 		o.actId,
 		o.lastRefreshAt,
 		o.todayCount,
 		o.total,
-	).Scan(&o.id); err != nil {
-		panic(err)
-	}
+	)
 	o.loaded, o.dirty = true, 0
 	dbctx.GetOrAddCachedRecord(ctx, o) // 主键回填后进身份表
 }

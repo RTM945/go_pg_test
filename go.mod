@@ -23,3 +23,8 @@ require (
 )
 
 replace pdbgen v0.0.0 => ../pdbgen
+
+tool (
+	pdbgen/gen/bean
+	pdbgen/gen/ddl
+)
