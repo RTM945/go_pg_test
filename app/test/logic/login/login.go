@@ -12,7 +12,6 @@ import (
 	"go_pg_test/common/redis"
 	"go_pg_test/common/token"
 	testpb "go_pg_test/genpb/test"
-	"pdbgen/dbpool"
 )
 
 const (
@@ -109,7 +108,8 @@ func checkLoginParams(plat, account, deviceID, refreshToken, clientVersion strin
 
 // startSession 是所有登录路径（新号、SDK 登录老号、免登录）成功时对 user 做的事：
 // 记登录时间，开一条新的 requestToken 链（登录 = 新会话，旧链作废）。
-// 调用方必须持有 uid 锁，或者 user 是本事务刚建的新号。
+// user 要么是本事务新建的号，要么是持有它的 uid 锁时查出来的
+// （user 表声明了 lock="id"，不持锁查出来的行 SetXxx 会 panic）。
 func startSession(user *ptable.User, now time.Time) (requestToken string) {
 	requestToken = token.New32()
 	user.SetLastLoginAt(now.Unix())
@@ -212,7 +212,7 @@ func autoLogin(ctx context.Context, s *session.Session, deviceID, presented stri
 // findRefreshRow 事务外按哈希找免登录行：先当成当前 token 找，找不到再当成上一个 token 找
 // （还在不在宽限期内，由锁内的 rotateRefresh 判断）。id 为 0 表示没有。
 func findRefreshRow(ctx context.Context, hash string) (id, uid int64, err error) {
-	err = dbpool.Query(ctx, func(ctx context.Context) error {
+	err = db.Query(ctx, func(ctx context.Context) error {
 		row := ptable.UserRefreshTokenTable.SelectByToken(ctx, hash)
 		if row == nil {
 			if rows := ptable.UserRefreshTokenTable.SelectListByPrevToken(ctx, hash); len(rows) == 1 {
@@ -229,7 +229,7 @@ func findRefreshRow(ctx context.Context, hash string) (id, uid int64, err error)
 
 // 返回 0 表示没有这个身份
 func findUIDByIdentity(ctx context.Context, platform int16, platUID string) (uid int64, err error) {
-	err = dbpool.Query(ctx, func(ctx context.Context) error {
+	err = db.Query(ctx, func(ctx context.Context) error {
 		if ident := ptable.UserIdentityTable.SelectByPlatformPlatformUID(ctx, platform, platUID); ident != nil {
 			uid = ident.Uid()
 		}
@@ -246,7 +246,8 @@ func findOrCreateAccount(ctx context.Context, platform int16, platUID, deviceID 
 		return false, err
 	}
 
-	// 2. 没查到：按身份加命名锁，事务内再查一次，再建
+	// 2. 没查到：按身份加命名锁，事务内再查一次，再建。这个事务不持有任何 uid 锁，
+	//    查出来的已有身份只能读；新建的行不受 lock 列限制。
 	err = db.WithNamedLock(ctx, "identity", fmt.Sprintf("%d:%s", platform, platUID), func(ctx context.Context) error {
 		if ident := ptable.UserIdentityTable.GetByPlatformPlatformUID(ctx, platform, platUID); ident != nil {
 			out.uid = ident.Uid() // 排队期间别人已经建好了
@@ -280,7 +281,8 @@ func checkClientVersion(v string) error {
 
 // ---- 免登录 token 表 ----
 // token / prevToken 列里都是 token.Hash 之后的值，写入一律经过 refreshState.store。
-// 调用方必须已持有 uid 锁；或者 uid 是刚建的新号（没有竞争）。
+// 表上声明了 lock="uid"：改已有的行要持有那个 uid 的锁，否则 panic。新建行不受这个限制，
+// 但同一 (uid, device) 只能有一行（唯一索引），所以也要在 uid 锁内建，或者 uid 是刚建的新号（没有竞争）。
 
 // refreshState 是一台设备的免登录凭证：当前 token、上一个 token（都是哈希）、上一个 token 被换下来的时间。
 type refreshState struct {
@@ -331,7 +333,7 @@ func insertRefreshToken(ctx context.Context, uid int64, deviceID, refreshToken s
 
 // upsertRefreshToken SDK 登录：整行换成新凭证，prev 和作废标记一起清掉
 // （prev 不清的话，作废前的旧 token 在宽限期内还能用）。
-// 没有 ON CONFLICT，所以先查后写；同一 (uid, device) 的写都在 uid 锁内，不会并发。
+// 没有 ON CONFLICT，所以先查后写；调用方持有 uid 锁，同一 (uid, device) 的写不会并发。
 func upsertRefreshToken(ctx context.Context, uid int64, deviceID, refreshToken string, now time.Time) {
 	row := ptable.UserRefreshTokenTable.GetByUidDeviceId(ctx, uid, deviceID)
 	if row == nil {

@@ -10,6 +10,10 @@
      showSQL="true"
      appName="lobby-svc">
 
+    <!-- 每张表的 lock 列：一行由 key 等于这一列的值的 uid 咨询锁保护。要改它（SetXxx / Delete），
+         事务就得持有这把锁（db.WithUserLock / db.WithUserTryLock 传的 uid），否则 panic；
+         没持锁时查出来的行只能读。本事务 Insert 的新行不受限制。见 pdbgen 的 docs/design.md 2.8 -->
+
     <bean name="User">
         <variable name="id" type="int64"/>
         <variable name="name" type="string"/> 角色名
@@ -20,7 +24,7 @@
         <variable name="totalCharge" type="int64"/>    累计充值
         <variable name="firstChargeAt" type="int64"/>     0 = 未首充
     </bean>
-    <table name="user" bean="User">
+    <table name="user" bean="User" lock="id">
         <primaryKey variable="id" autoIncrement="true" start="1000"/>
     </table>
 
@@ -31,7 +35,7 @@
         <variable name="uid" type="int64"/> 关联的uid
         <variable name="createdAt" type="int64"/>
     </bean>
-    <table name="user_identity" bean="UserIdentity">
+    <table name="user_identity" bean="UserIdentity" lock="uid">
         <primaryKey variable="id" autoIncrement="true"/>
         <index variable="uid" unique="false"/>
         <index variable="platform,platformUID" unique="true"/>
@@ -48,7 +52,7 @@
         <variable name="revokedAt" type="int64"/> 非0表示作废 改密码 玩家登出 封禁时设置一下now 新设备因为deviceId不同另起一行 旧设备因为sdk登录会覆盖这一行
     </bean>
 
-    <table name="user_refresh_token" bean="UserRefreshToken">
+    <table name="user_refresh_token" bean="UserRefreshToken" lock="uid">
         <primaryKey variable="id" autoIncrement="true"/>
         <index variable="uid, deviceId" unique="true"/>
         <index variable="token" unique="true"/>
@@ -65,42 +69,9 @@
         <variable name="total" type="int32"/> 总共领了几次
     </bean>
 
-    <table name="user_red_envelope" bean="RedEnvelope">
+    <table name="user_red_envelope" bean="RedEnvelope" lock="uid">
         <primaryKey variable="id" autoIncrement="true"/>
         <index variable="uid,actId" unique="true"/>
-    </table>
-
-    <bean name="Mail">
-        <variable name="id" type="int64"/> 自增
-        <variable name="uid" type="int64"/> user id
-        <variable name="confId" type="int32"/> 配置id
-        <variable name="state" type="int32"/> 状态
-        <variable name="receiveAt" type="int64"/> 收取时间
-        <variable name="params" type="string"/> json
-        <variable name="awardList" type="string"/> json
-    </bean>
-
-    <table name="user_mail" bean="Mail">
-        <primaryKey variable="id" autoIncrement="true"/>
-        <index variable="uid,confId" unique="false"/>
-        <index variable="uid" unique="false"/> 拉取某个玩家的全部邮件
-    </table>
-
-    <bean name="GMMail">
-        <variable name="id" type="int64"/> 自增
-        <variable name="uuid" type="string"/> GM平台幂等键，所有服收到同一条通知时用同一个值
-        <variable name="params" type="string"/> json
-        <variable name="awardList" type="string"/> json
-        <variable name="startAt" type="int64"/> 开始时间
-        <variable name="endAt" type="int64"/> 结束时间
-        <variable name="channel" type="string"/> 渠道
-        <variable name="userCreatedAt" type="int64"/> 创角时间
-        <variable name="condition" type="string"/> 条件 应该需要脚本引擎执行
-    </bean>
-
-    <table name="gm_mail" bean="GMMail">
-        <primaryKey variable="id" autoIncrement="true"/>
-        <index variable="uuid" unique="true"/>
     </table>
 </pdb>
 

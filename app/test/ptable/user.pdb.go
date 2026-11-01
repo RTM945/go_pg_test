@@ -25,8 +25,12 @@ type User struct {
 	loaded   bool   // 对应数据库里的一行：查出来的，或者 Insert 过的
 	deleted  bool   // 标记了删除，提交前 flush 成 DELETE
 	detached bool   // 脱离了事务：SetXxx / Delete 会 panic
+	foreign  bool   // 当前事务没有持有保护这一行的锁（id 的值）：SetXxx / Delete 会 panic
 	dirty    uint64 // 改过、还没落库的列，第 i 位对应 updateColumnsUser[i]
 }
+
+// User 的每一行由 key 等于 id 的 bigint 咨询锁保护（pdb.xml 的 lock），修改要持有它。
+var _ dbctx.Owned = (*User)(nil)
 
 const (
 	dirtyUserName          uint64 = 1 << 0
@@ -66,6 +70,9 @@ func (o *User) SetName(v string) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.name != v {
 		o.name = v
 		o.dirty |= dirtyUserName
@@ -79,6 +86,9 @@ func (o *User) Status() int16 {
 func (o *User) SetStatus(v int16) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.status != v {
 		o.status = v
@@ -94,6 +104,9 @@ func (o *User) SetCreatedAt(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.createdAt != v {
 		o.createdAt = v
 		o.dirty |= dirtyUserCreatedAt
@@ -107,6 +120,9 @@ func (o *User) LastLoginAt() int64 {
 func (o *User) SetLastLoginAt(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.lastLoginAt != v {
 		o.lastLoginAt = v
@@ -122,6 +138,9 @@ func (o *User) SetRequestToken(v string) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.requestToken != v {
 		o.requestToken = v
 		o.dirty |= dirtyUserRequestToken
@@ -135,6 +154,9 @@ func (o *User) TotalCharge() int64 {
 func (o *User) SetTotalCharge(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.totalCharge != v {
 		o.totalCharge = v
@@ -150,6 +172,9 @@ func (o *User) SetFirstChargeAt(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.firstChargeAt != v {
 		o.firstChargeAt = v
 		o.dirty |= dirtyUserFirstChargeAt
@@ -160,6 +185,9 @@ func (o *User) SetFirstChargeAt(v int64) {
 func (o *User) Delete() {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.loaded {
 		o.deleted = true
@@ -184,6 +212,12 @@ func (o *User) Detach() {
 	}
 }
 
+// 以下实现 dbctx.Owned。
+
+func (o *User) LockKey() (string, int64) { return "id", o.id }
+
+func (o *User) MarkForeign() { o.foreign = true }
+
 func (o *User) DirtyColumns() uint64 {
 	if !o.loaded || o.deleted {
 		return 0
@@ -196,11 +230,11 @@ func (o *User) FlushStmt() (string, []any) {
 	case !o.loaded:
 		return "", nil
 	case o.deleted:
-		return "DELETE FROM \"user\" WHERE \"id\" = $1", []any{o.id}
+		return "DELETE FROM \"public\".\"user\" WHERE \"id\" = $1", []any{o.id}
 	case o.dirty == 0:
 		return "", nil
 	}
-	return dbctx.UpdateStmt("\"user\"", "\"id\"", o.id, updateColumnsUser, o.dirty,
+	return dbctx.UpdateStmt("\"public\".\"user\"", "\"id\"", o.id, updateColumnsUser, o.dirty,
 		o.name,
 		o.status,
 		o.createdAt,
@@ -227,7 +261,7 @@ func scanUser(s dbctx.Scanner) (*User, error) {
 }
 
 func (t user) queryId(ctx context.Context, q dbctx.Querier, id int64) *User {
-	const query = "SELECT " + selectColumnsUser + " FROM \"user\" WHERE \"id\" = $1"
+	const query = "SELECT " + selectColumnsUser + " FROM \"public\".\"user\" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUser, id)
 }
 
@@ -252,7 +286,7 @@ func (t user) DeleteById(ctx context.Context, id int64) bool {
 	return true
 }
 
-const selectAllUser = "SELECT " + selectColumnsUser + " FROM \"user\""
+const selectAllUser = "SELECT " + selectColumnsUser + " FROM \"public\".\"user\""
 
 func (t user) GetAll(ctx context.Context) []*User {
 	return dbctx.QueryList(ctx, dbctx.SQLTxFromCtx(ctx), selectAllUser, scanUser)
@@ -269,8 +303,8 @@ func (t user) Insert(ctx context.Context, o *User) {
 	}
 	tx := dbctx.SQLTxFromCtx(ctx)
 	dbctx.GetOrAddCachedRecord(ctx, o) // 主键还是 0：只登记快照，回滚时恢复成插入前的样子
-	const query = "INSERT INTO \"user\" (\"name\", \"status\", \"created_at\", \"last_login_at\", \"request_token\", \"total_charge\", \"first_charge_at\") VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING \"id\""
-	if err := tx.QueryRow(ctx, query,
+	const query = "INSERT INTO \"public\".\"user\" (\"name\", \"status\", \"created_at\", \"last_login_at\", \"request_token\", \"total_charge\", \"first_charge_at\") VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING \"id\""
+	dbctx.InsertReturning(ctx, tx, query, &o.id,
 		o.name,
 		o.status,
 		o.createdAt,
@@ -278,9 +312,7 @@ func (t user) Insert(ctx context.Context, o *User) {
 		o.requestToken,
 		o.totalCharge,
 		o.firstChargeAt,
-	).Scan(&o.id); err != nil {
-		panic(err)
-	}
+	)
 	o.loaded, o.dirty = true, 0
 	dbctx.GetOrAddCachedRecord(ctx, o) // 主键回填后进身份表
 }

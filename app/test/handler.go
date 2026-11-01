@@ -77,7 +77,8 @@ func handler(log *slog.Logger) http.HandlerFunc {
 
 		var typeId int32
 		defer func() {
-			// panic 是 pdbgen 和业务的错误传播方式，事务已经在 Procedure 里回滚。
+			// SQL 错误 pdbgen 已经变成了返回值，能到这里的 panic 都是 bug：业务代码自己的，
+			// 或者违反了 pdbgen 的约定（比如改了没持锁的行）。事务已经在 Procedure 里回滚，
 			// 在这里收口：记堆栈、回 500，而不是让 net/http 掐断连接。
 			if p := recover(); p != nil {
 				if p == http.ErrAbortHandler {

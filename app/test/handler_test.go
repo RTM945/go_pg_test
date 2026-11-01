@@ -126,7 +126,7 @@ func TestHandleRejectsDuplicates(t *testing.T) {
 func TestHandlerAuthenticatesBeforeDecoding(t *testing.T) {
 	garbage := []byte{0xff, 0xff, 0xff} // 没写完的 varint
 
-	if w := serve(t, testpb.PROTOCOL_TYPE_CMails, garbage); w.Code != http.StatusUnauthorized || w.Header().Get(hdrErrCode) != "TOKEN_EXPIRED" {
+	if w := serve(t, testpb.PROTOCOL_TYPE_CRedEnvelopeClick, garbage); w.Code != http.StatusUnauthorized || w.Header().Get(hdrErrCode) != "TOKEN_EXPIRED" {
 		t.Fatalf("session.User 没带 token 期望 401 TOKEN_EXPIRED，实际 %d %s", w.Code, w.Header().Get(hdrErrCode))
 	}
 	if w := serve(t, testpb.PROTOCOL_TYPE_CHeartbeat, garbage); w.Code != http.StatusUnauthorized {

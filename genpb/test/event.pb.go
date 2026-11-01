@@ -62,8 +62,8 @@ func (*CPollEvents) Descriptor() ([]byte, []int) {
 
 // 每个事件类型两级版本：
 //
-//	global 全服变化（全服 GM 邮件、活动开启）
-//	user   只针对当前用户的变化（定向 GM 邮件）
+//	global 全服变化（比如活动开启）
+//	user   只针对当前用户的变化
 //
 // 任一变大，客户端就同步对应类型。
 type EventVersion struct {
@@ -118,7 +118,7 @@ func (x *EventVersion) GetUser() int64 {
 	return 0
 }
 
-// key 是事件类型 id。已知类型：1=MAIL_NEW、2=ACTIVITY_START；
+// key 是事件类型 id。已知类型：2=ACTIVITY_START（1 以前是 MAIL_NEW，不要复用）；
 // 新增类型只需在业务层加常量，协议和表结构都不用动。
 type EventVersions struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`

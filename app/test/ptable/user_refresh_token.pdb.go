@@ -25,8 +25,12 @@ type UserRefreshToken struct {
 	loaded   bool   // 对应数据库里的一行：查出来的，或者 Insert 过的
 	deleted  bool   // 标记了删除，提交前 flush 成 DELETE
 	detached bool   // 脱离了事务：SetXxx / Delete 会 panic
+	foreign  bool   // 当前事务没有持有保护这一行的锁（uid 的值）：SetXxx / Delete 会 panic
 	dirty    uint64 // 改过、还没落库的列，第 i 位对应 updateColumnsUserRefreshToken[i]
 }
+
+// UserRefreshToken 的每一行由 key 等于 uid 的 bigint 咨询锁保护（pdb.xml 的 lock），修改要持有它。
+var _ dbctx.Owned = (*UserRefreshToken)(nil)
 
 const (
 	dirtyUserRefreshTokenUid       uint64 = 1 << 0
@@ -66,6 +70,9 @@ func (o *UserRefreshToken) SetUid(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.uid != v {
 		o.uid = v
 		o.dirty |= dirtyUserRefreshTokenUid
@@ -79,6 +86,9 @@ func (o *UserRefreshToken) DeviceId() string {
 func (o *UserRefreshToken) SetDeviceId(v string) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.deviceId != v {
 		o.deviceId = v
@@ -94,6 +104,9 @@ func (o *UserRefreshToken) SetToken(v string) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.token != v {
 		o.token = v
 		o.dirty |= dirtyUserRefreshTokenToken
@@ -107,6 +120,9 @@ func (o *UserRefreshToken) PrevToken() string {
 func (o *UserRefreshToken) SetPrevToken(v string) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.prevToken != v {
 		o.prevToken = v
@@ -122,6 +138,9 @@ func (o *UserRefreshToken) SetRotatedAt(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.rotatedAt != v {
 		o.rotatedAt = v
 		o.dirty |= dirtyUserRefreshTokenRotatedAt
@@ -135,6 +154,9 @@ func (o *UserRefreshToken) ExpiresAt() int64 {
 func (o *UserRefreshToken) SetExpiresAt(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.expiresAt != v {
 		o.expiresAt = v
@@ -150,6 +172,9 @@ func (o *UserRefreshToken) SetRevokedAt(v int64) {
 	if o.detached {
 		dbctx.PanicDetached(o)
 	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
+	}
 	if o.revokedAt != v {
 		o.revokedAt = v
 		o.dirty |= dirtyUserRefreshTokenRevokedAt
@@ -160,6 +185,9 @@ func (o *UserRefreshToken) SetRevokedAt(v int64) {
 func (o *UserRefreshToken) Delete() {
 	if o.detached {
 		dbctx.PanicDetached(o)
+	}
+	if o.foreign {
+		dbctx.PanicForeign(o)
 	}
 	if o.loaded {
 		o.deleted = true
@@ -184,6 +212,12 @@ func (o *UserRefreshToken) Detach() {
 	}
 }
 
+// 以下实现 dbctx.Owned。
+
+func (o *UserRefreshToken) LockKey() (string, int64) { return "uid", o.uid }
+
+func (o *UserRefreshToken) MarkForeign() { o.foreign = true }
+
 func (o *UserRefreshToken) DirtyColumns() uint64 {
 	if !o.loaded || o.deleted {
 		return 0
@@ -196,11 +230,11 @@ func (o *UserRefreshToken) FlushStmt() (string, []any) {
 	case !o.loaded:
 		return "", nil
 	case o.deleted:
-		return "DELETE FROM \"user_refresh_token\" WHERE \"id\" = $1", []any{o.id}
+		return "DELETE FROM \"public\".\"user_refresh_token\" WHERE \"id\" = $1", []any{o.id}
 	case o.dirty == 0:
 		return "", nil
 	}
-	return dbctx.UpdateStmt("\"user_refresh_token\"", "\"id\"", o.id, updateColumnsUserRefreshToken, o.dirty,
+	return dbctx.UpdateStmt("\"public\".\"user_refresh_token\"", "\"id\"", o.id, updateColumnsUserRefreshToken, o.dirty,
 		o.uid,
 		o.deviceId,
 		o.token,
@@ -227,7 +261,7 @@ func scanUserRefreshToken(s dbctx.Scanner) (*UserRefreshToken, error) {
 }
 
 func (t userRefreshToken) queryId(ctx context.Context, q dbctx.Querier, id int64) *UserRefreshToken {
-	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"id\" = $1"
+	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"public\".\"user_refresh_token\" WHERE \"id\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, id)
 }
 
@@ -244,7 +278,7 @@ func (t userRefreshToken) SelectById(ctx context.Context, id int64) *UserRefresh
 
 func (t userRefreshToken) queryUidDeviceId(ctx context.Context, q dbctx.Querier, uid int64, deviceId string) *UserRefreshToken {
 	dbctx.CheckPredicate(ctx, "user_refresh_token", dirtyUserRefreshTokenUid|dirtyUserRefreshTokenDeviceId)
-	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"uid\" = $1 AND \"device_id\" = $2"
+	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"public\".\"user_refresh_token\" WHERE \"uid\" = $1 AND \"device_id\" = $2"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, uid, deviceId)
 }
 
@@ -258,7 +292,7 @@ func (t userRefreshToken) SelectByUidDeviceId(ctx context.Context, uid int64, de
 
 func (t userRefreshToken) queryToken(ctx context.Context, q dbctx.Querier, token string) *UserRefreshToken {
 	dbctx.CheckPredicate(ctx, "user_refresh_token", dirtyUserRefreshTokenToken)
-	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"token\" = $1"
+	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"public\".\"user_refresh_token\" WHERE \"token\" = $1"
 	return dbctx.QueryOne(ctx, q, query, scanUserRefreshToken, token)
 }
 
@@ -272,7 +306,7 @@ func (t userRefreshToken) SelectByToken(ctx context.Context, token string) *User
 
 func (t userRefreshToken) queryPrevToken(ctx context.Context, q dbctx.Querier, prevToken string) []*UserRefreshToken {
 	dbctx.CheckPredicate(ctx, "user_refresh_token", dirtyUserRefreshTokenPrevToken)
-	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\" WHERE \"prev_token\" = $1"
+	const query = "SELECT " + selectColumnsUserRefreshToken + " FROM \"public\".\"user_refresh_token\" WHERE \"prev_token\" = $1"
 	return dbctx.QueryList(ctx, q, query, scanUserRefreshToken, prevToken)
 }
 
@@ -294,7 +328,7 @@ func (t userRefreshToken) DeleteById(ctx context.Context, id int64) bool {
 	return true
 }
 
-const selectAllUserRefreshToken = "SELECT " + selectColumnsUserRefreshToken + " FROM \"user_refresh_token\""
+const selectAllUserRefreshToken = "SELECT " + selectColumnsUserRefreshToken + " FROM \"public\".\"user_refresh_token\""
 
 func (t userRefreshToken) GetAll(ctx context.Context) []*UserRefreshToken {
 	return dbctx.QueryList(ctx, dbctx.SQLTxFromCtx(ctx), selectAllUserRefreshToken, scanUserRefreshToken)
@@ -311,8 +345,8 @@ func (t userRefreshToken) Insert(ctx context.Context, o *UserRefreshToken) {
 	}
 	tx := dbctx.SQLTxFromCtx(ctx)
 	dbctx.GetOrAddCachedRecord(ctx, o) // 主键还是 0：只登记快照，回滚时恢复成插入前的样子
-	const query = "INSERT INTO \"user_refresh_token\" (\"uid\", \"device_id\", \"token\", \"prev_token\", \"rotated_at\", \"expires_at\", \"revoked_at\") VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING \"id\""
-	if err := tx.QueryRow(ctx, query,
+	const query = "INSERT INTO \"public\".\"user_refresh_token\" (\"uid\", \"device_id\", \"token\", \"prev_token\", \"rotated_at\", \"expires_at\", \"revoked_at\") VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING \"id\""
+	dbctx.InsertReturning(ctx, tx, query, &o.id,
 		o.uid,
 		o.deviceId,
 		o.token,
@@ -320,9 +354,7 @@ func (t userRefreshToken) Insert(ctx context.Context, o *UserRefreshToken) {
 		o.rotatedAt,
 		o.expiresAt,
 		o.revokedAt,
-	).Scan(&o.id); err != nil {
-		panic(err)
-	}
+	)
 	o.loaded, o.dirty = true, 0
 	dbctx.GetOrAddCachedRecord(ctx, o) // 主键回填后进身份表
 }

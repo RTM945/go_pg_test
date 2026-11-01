@@ -8,7 +8,6 @@ import (
 	"go_pg_test/app/test/logic/event"
 	"go_pg_test/app/test/logic/heartbeat"
 	"go_pg_test/app/test/logic/login"
-	"go_pg_test/app/test/logic/mail"
 	"go_pg_test/app/test/logic/red_envelope"
 )
 
@@ -16,9 +15,6 @@ func init() {
 	processRegistry.Handle(event.ProcessCPollEvents)
 	processRegistry.Handle(heartbeat.ProcessCHeartbeat)
 	processRegistry.Handle(login.ProcessCLogin)
-	processRegistry.Handle(mail.ProcessCMails)
-	processRegistry.Handle(mail.ProcessCReadMail)
-	processRegistry.Handle(mail.ProcessCGetAttachment)
 	processRegistry.Handle(red_envelope.ProcessCRedEnvelope)
 	processRegistry.Handle(red_envelope.ProcessCRedEnvelopeClick)
 }

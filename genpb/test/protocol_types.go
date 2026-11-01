@@ -25,26 +25,6 @@ const PROTOCOL_TYPE_EventVersions int32 = 106
 
 func (*EventVersions) TypeId() int32 { return PROTOCOL_TYPE_EventVersions }
 
-const PROTOCOL_TYPE_CMails int32 = 107
-
-func (*CMails) TypeId() int32 { return PROTOCOL_TYPE_CMails }
-
-const PROTOCOL_TYPE_SMails int32 = 108
-
-func (*SMails) TypeId() int32 { return PROTOCOL_TYPE_SMails }
-
-const PROTOCOL_TYPE_CReadMail int32 = 109
-
-func (*CReadMail) TypeId() int32 { return PROTOCOL_TYPE_CReadMail }
-
-const PROTOCOL_TYPE_CGetAttachment int32 = 110
-
-func (*CGetAttachment) TypeId() int32 { return PROTOCOL_TYPE_CGetAttachment }
-
-const PROTOCOL_TYPE_SGetAttachment int32 = 111
-
-func (*SGetAttachment) TypeId() int32 { return PROTOCOL_TYPE_SGetAttachment }
-
 const PROTOCOL_TYPE_CRedEnvelope int32 = 123
 
 func (*CRedEnvelope) TypeId() int32 { return PROTOCOL_TYPE_CRedEnvelope }
